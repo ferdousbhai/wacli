@@ -32,6 +32,9 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 	}
 	info, _ := a.ar.Info(chatJID)
 	res = BackfillResult{Chat: chatJID, Folder: info.Folder, Done: info.BackfillDone}
+	if rows := c.Rows(); len(rows) > 0 {
+		res.Oldest = time.Unix(rows[0].TS, 0)
+	}
 	if info.BackfillDone {
 		return res, nil
 	}
@@ -148,7 +151,7 @@ func (a *Archiver) deliverBackfill(ctx context.Context, chatID string, batch his
 	if err != nil {
 		return
 	}
-	key := a.canonical(ctx, jid).String()
+	key := a.chatKey(ctx, jid).String()
 	a.mu.Lock()
 	ch, running := a.backfill[key]
 	if running {

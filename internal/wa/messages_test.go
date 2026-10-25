@@ -552,9 +552,6 @@ func TestParseLiveMessagePollCreationV3(t *testing.T) {
 	if got, want := pm.Poll.Options, []string{"Yes", "No", "Maybe"}; !equalStrings(got, want) {
 		t.Fatalf("options = %v want %v", got, want)
 	}
-	if pm.Poll.SelectableCount != 2 {
-		t.Fatalf("selectable = %d", pm.Poll.SelectableCount)
-	}
 	if pm.Text != "Poll: Pizza?" {
 		t.Fatalf("text = %q", pm.Text)
 	}

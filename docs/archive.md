@@ -77,7 +77,7 @@ Matched against a real iOS export (`internal/archive/testdata`).
 | Group renamed | System entry `‎X changed the group name to “Y”`. The folder keeps its name, so saved paths keep working. |
 | Other group changes, calls | System entries as iOS writes them: created, added, removed, left, joined using the invite link, description or icon changed, missed and finished calls (call records come only from your own phone). |
 | Edit or delete naming someone else's message | Ignored, unless it deletes as a group admin: only a message's sender may change it. A live edit of a message not archived yet is ignored too (the original arrives with history). |
-| Deleted before wacli saw it | `‎This message was deleted.` (or `‎You deleted this message.`) at the original time; a message an admin deleted keeps its sender. |
+| Deleted before wacli saw it | `‎This message was deleted.` (or `‎You deleted this message.`) at the original time (from history) or the time of deletion (live); a message an admin deleted keeps its sender. |
 | New chat | Folder created. Until the contact's or group's name is known (right after linking) it is named by number; it is renamed once the name arrives. |
 
 Writes during a history sync are batched: each chat is written once per batch,

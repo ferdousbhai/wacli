@@ -7,10 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// AudioMessage has no caption field in the protocol, so the only value the audio
-// branch could put in Media.Caption is the "[Audio]" placeholder it just wrote to
-// Text. Storing it reports content the sender never wrote on the one media type
-// that can never carry a caption.
+// AudioMessage has no caption field in the protocol: nothing may invent one.
 func TestParseLiveMessageLeavesAudioCaptionEmpty(t *testing.T) {
 	pm := ParseLiveMessage(liveEvent(&waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
@@ -27,9 +24,8 @@ func TestParseLiveMessageLeavesAudioCaptionEmpty(t *testing.T) {
 	if pm.Media.Caption != "" {
 		t.Fatalf("expected an empty caption, got %q", pm.Media.Caption)
 	}
-	// The Text placeholder is the long-standing display behaviour and stays.
-	if pm.Text != "[Audio]" {
-		t.Fatalf("expected the [Audio] text placeholder, got %q", pm.Text)
+	if pm.Text != "" {
+		t.Fatalf("expected no text, got %q", pm.Text)
 	}
 }
 

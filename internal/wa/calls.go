@@ -29,11 +29,6 @@ type ParsedCallEvent struct {
 	Participants []ParsedCallParticipant
 }
 
-type ParsedCallDelete struct {
-	Chat      types.JID
-	Direction string
-}
-
 func extractCallLog(m *waProto.Message, pm *ParsedMessage) {
 	call := m.GetCallLogMesssage()
 	if call == nil {

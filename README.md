@@ -33,7 +33,7 @@ command.
 Needs Go 1.27+ and a C compiler (the WhatsApp session store is SQLite):
 
 ```bash
-go install github.com/ferdousbhai/wacli/cmd/wacli@latest   # or, from a checkout: make install
+GOBIN=~/.local/bin go install github.com/ferdousbhai/wacli/cmd/wacli@latest   # or, from a checkout: make install
 ```
 
 With GCC 15+, set `CGO_CFLAGS=-Wno-error=missing-braces` (the Makefile does).

@@ -14,7 +14,6 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 		pm.Media = &Media{
 			Type:          "image",
 			Caption:       img.GetCaption(),
-			MimeType:      img.GetMimetype(),
 			DirectPath:    img.GetDirectPath(),
 			MediaKey:      clone(img.GetMediaKey()),
 			FileSHA256:    clone(img.GetFileSHA256()),
@@ -34,7 +33,6 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 		pm.Media = &Media{
 			Type:          mediaType,
 			Caption:       vid.GetCaption(),
-			MimeType:      vid.GetMimetype(),
 			DirectPath:    vid.GetDirectPath(),
 			MediaKey:      clone(vid.GetMediaKey()),
 			FileSHA256:    clone(vid.GetFileSHA256()),
@@ -44,15 +42,9 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 	}
 
 	if aud := m.GetAudioMessage(); aud != nil {
-		// Preserve supplied text before adding the display-only fallback.
-		caption := pm.Text
-		if pm.Text == "" {
-			pm.Text = "[Audio]"
-		}
 		pm.Media = &Media{
 			Type:          "audio",
-			Caption:       caption,
-			MimeType:      aud.GetMimetype(),
+			Caption:       pm.Text,
 			DirectPath:    aud.GetDirectPath(),
 			MediaKey:      clone(aud.GetMediaKey()),
 			FileSHA256:    clone(aud.GetFileSHA256()),
@@ -70,7 +62,6 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 			Caption:       doc.GetCaption(),
 			Filename:      doc.GetFileName(),
 			PageCount:     doc.GetPageCount(),
-			MimeType:      doc.GetMimetype(),
 			DirectPath:    doc.GetDirectPath(),
 			MediaKey:      clone(doc.GetMediaKey()),
 			FileSHA256:    clone(doc.GetFileSHA256()),
@@ -82,7 +73,6 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 	if sticker := m.GetStickerMessage(); sticker != nil {
 		pm.Media = &Media{
 			Type:          "sticker",
-			MimeType:      sticker.GetMimetype(),
 			DirectPath:    sticker.GetDirectPath(),
 			MediaKey:      clone(sticker.GetMediaKey()),
 			FileSHA256:    clone(sticker.GetFileSHA256()),

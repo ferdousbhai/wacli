@@ -828,3 +828,15 @@ func TestLiveForgeriesOfUnarchivedOrWacliMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestMappingLearnedLaterKeepsOneFolder(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	lid := "99887766554433@lid"
+	pn := "6285555555555@s.whatsapp.net"
+	a.handle(live(lid, lid, "L1", false, t0, text("first")))
+	a.wa.StoreLIDMapping(context.Background(), lid, pn)
+	a.handle(live(pn, pn, "L2", false, t0+5, text("second")))
+	if n := len(ar.Chats()); n != 1 {
+		t.Errorf("%d chats: %+v", n, ar.Chats())
+	}
+}

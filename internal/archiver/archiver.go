@@ -228,6 +228,9 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		if chatID == "" {
 			continue
 		}
+		// The phone pairs the chat's hidden ID with its number here; stored
+		// first, so its messages land in one folder.
+		a.wa.StoreLIDMapping(ctx, conv.GetLidJID(), conv.GetPnJID())
 		hint := conv.GetName()
 		if hint == "" {
 			hint = conv.GetDisplayName()
@@ -302,11 +305,14 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	// Live edits, deletes and redeliveries name a message by ID only; the
 	// phone checked history ones, but live, anyone in the chat could name
 	// someone else's message. Checked before a folder is made for it.
-	if b == nil && !a.mayArchiveLive(ctx, a.knownChat(ctx, pm.Chat), pm) {
+	c, err := a.knownChat(ctx, pm.Chat)
+	if err == nil && b == nil && !a.mayArchiveLive(ctx, c, pm) {
 		a.logf("ignored %s in %s: it can't be checked as its sender's", pm.ID, pm.Chat)
 		return
 	}
-	c, err := a.chat(ctx, pm.Chat, hint)
+	if err == nil && c == nil {
+		c, err = a.chat(ctx, pm.Chat, hint)
+	}
 	if err != nil {
 		a.logf("warning: %v", err)
 		return
@@ -458,6 +464,7 @@ func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender str
 		if e.Text == pm.Media.Filename {
 			e.Text = ""
 		}
+		e.Text = a.names.mentions(ctx, e.Text, pm.MentionedJIDs)
 		e.DocLabel = archive.DocLabel(pm.Media.Filename, pm.Media.PageCount)
 	case pm.Media != nil:
 		e.Text = a.names.mentions(ctx, pm.Media.Caption, pm.MentionedJIDs)
@@ -545,11 +552,11 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 
 // chat returns the archive chat for jid, creating its folder on first use.
 func (a *Archiver) chat(ctx context.Context, jid types.JID, hint string) (*archive.Chat, error) {
-	jid = a.canonical(ctx, jid)
-	key := jid.String()
-	if _, ok := a.ar.Info(key); ok {
-		return a.ar.Chat(key)
+	if c, err := a.knownChat(ctx, jid); c != nil || err != nil {
+		return c, err
 	}
+	jid = a.chatKey(ctx, jid)
+	key := jid.String()
 	name := archive.CleanName(a.names.chat(ctx, jid, hint))
 	kind, suffix := chatKind(jid)
 	c, created, err := a.ar.EnsureChat(key, name, kind, suffix)
@@ -627,7 +634,7 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		},
 		Message: msg,
 	}
-	chat := a.canonical(ctx, to).String()
+	chat := a.chatKey(ctx, to).String()
 	if data != nil {
 		a.media.reserve(chat, string(id)) // no worker downloads our own upload
 	}
@@ -663,7 +670,8 @@ func (a *Archiver) fillBlank(ctx context.Context, b *batch, c *archive.Chat, pm 
 // sender chose. IDs with ":" are wacli's own (group changes, imports,
 // repairs); no WhatsApp message has one. A change to a message not
 // archived yet can't be checked: an edit is dropped (the original comes
-// with history), and a delete is kept only as the sender's own.
+// with history), and a delete is kept as the sender's own or a group
+// admin's.
 // c is nil for a chat not archived yet.
 func (a *Archiver) mayArchiveLive(ctx context.Context, c *archive.Chat, pm wa.ParsedMessage) bool {
 	switch {
@@ -681,16 +689,30 @@ func (a *Archiver) mayArchiveLive(ctx context.Context, c *archive.Chat, pm wa.Pa
 }
 
 // knownChat returns the archived chat for jid, or nil; it never makes one.
-func (a *Archiver) knownChat(ctx context.Context, jid types.JID) *archive.Chat {
-	key := a.canonical(ctx, jid).String()
+func (a *Archiver) knownChat(ctx context.Context, jid types.JID) (*archive.Chat, error) {
+	key := a.chatKey(ctx, jid).String()
 	if _, ok := a.ar.Info(key); !ok {
-		return nil
+		return nil, nil
 	}
-	c, err := a.ar.Chat(key)
-	if err != nil {
-		return nil
+	return a.ar.Chat(key)
+}
+
+// chatKey is the key of jid's chat: by phone number when WhatsApp tells us
+// the mapping, but a chat already archived under the other one (its hidden
+// ID, before the mapping was known) keeps its key, so one person never ends
+// up in two folders.
+func (a *Archiver) chatKey(ctx context.Context, jid types.JID) types.JID {
+	jid = jid.ToNonAD()
+	key := a.canonical(ctx, jid)
+	if _, ok := a.ar.Info(key.String()); ok {
+		return key
 	}
-	return c
+	for _, alt := range []types.JID{jid, a.wa.ResolvePNToLID(ctx, key).ToNonAD()} {
+		if _, ok := a.ar.Info(alt.String()); ok && !alt.IsEmpty() {
+			return alt
+		}
+	}
+	return key
 }
 
 // mayChange reports whether pm may change the archived message with its

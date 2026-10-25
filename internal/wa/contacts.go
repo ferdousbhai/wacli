@@ -72,3 +72,20 @@ func (c *Client) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	c.mu.Unlock()
 	return resolvePNToLID(ctx, cli, jid)
 }
+
+// StoreLIDMapping records that a hidden ID (LID) and a phone number are the
+// same person, as a history sync's conversation says.
+func (c *Client) StoreLIDMapping(ctx context.Context, lid, pn string) {
+	l, err1 := types.ParseJID(lid)
+	p, err2 := types.ParseJID(pn)
+	if err1 != nil || err2 != nil || l.Server != types.HiddenUserServer || p.Server != types.DefaultUserServer {
+		return
+	}
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || cli.Store == nil || cli.Store.LIDs == nil {
+		return
+	}
+	_ = cli.Store.LIDs.PutLIDMapping(ctx, l.ToNonAD(), p.ToNonAD())
+}

@@ -1,7 +1,5 @@
 [Unit]
 Description=wacli: keep WhatsApp chats as export folders
-Wants=network-online.target
-After=network-online.target
 
 [Service]
 ExecStart=%h/.local/bin/wacli sync --follow

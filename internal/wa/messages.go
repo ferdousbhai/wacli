@@ -16,7 +16,6 @@ type Media struct {
 	Type          string
 	Caption       string
 	Filename      string
-	MimeType      string
 	DirectPath    string
 	MediaKey      []byte
 	FileSHA256    []byte
@@ -36,9 +35,8 @@ type Location struct {
 // Poll captures the question + option list extracted from an incoming
 // PollCreationMessage (any of V1/V2/V3/V4/V5/V6).
 type Poll struct {
-	Question        string
-	Options         []string
-	SelectableCount uint32
+	Question string
+	Options  []string
 }
 
 type ParsedMessage struct {
@@ -288,9 +286,8 @@ func extractPoll(m *waProto.Message, pm *ParsedMessage) {
 		options = append(options, opt.GetOptionName())
 	}
 	pm.Poll = &Poll{
-		Question:        question,
-		Options:         options,
-		SelectableCount: creation.GetSelectableOptionsCount(),
+		Question: question,
+		Options:  options,
 	}
 	if pm.Text == "" && question != "" {
 		pm.Text = "Poll: " + question
