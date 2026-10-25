@@ -765,7 +765,7 @@ func TestCrashBetweenIndexAndChatWriteDoesNotDuplicate(t *testing.T) {
 	c.Insert(Row{ID: "c", TS: 2000}, text("c"))
 	before, _ := os.ReadFile(c.chatPath())
 	c.Insert(Row{ID: "b", TS: 1100}, text("b")) // full rewrite: index, then _chat.txt
-	os.WriteFile(c.chatPath(), before, 0o600)  // crash before the _chat.txt rename
+	os.WriteFile(c.chatPath(), before, 0o600)   // crash before the _chat.txt rename
 
 	b, _ := Open(Options{Root: root, Location: time.UTC})
 	c2, _ := b.Chat("1@s.whatsapp.net")
