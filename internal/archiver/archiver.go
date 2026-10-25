@@ -261,6 +261,13 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 
 func (a *Archiver) archiveWeb(ctx context.Context, b *batch, chatID, hint string, web *waWeb.WebMessageInfo) {
 	a.names.notePush(web.GetParticipant(), web.GetPushName())
+	if web.GetMessageStubType() == waWeb.WebMessageInfo_REVOKE {
+		// A message deleted before the history sync: only its key is left.
+		pm := wa.ParseHistoryMessage(chatID, web)
+		pm.Revoked = true
+		a.archiveMessage(ctx, b, pm, hint)
+		return
+	}
 	if web.GetMessageStubType() != 0 {
 		a.archiveStub(ctx, b, chatID, hint, web)
 		return
@@ -482,8 +489,16 @@ func formatDuration(secs int64) string {
 }
 
 func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, pm wa.ParsedMessage, row archive.Row) {
+	deletedByMe := pm.FromMe
+	// The deleted message's own sender: an admin may delete others'.
+	if pm.TargetSender != "" {
+		if j, err := types.ParseJID(pm.TargetSender); err == nil && !j.IsEmpty() {
+			pm.SenderJID, pm.FromMe, pm.PushName = pm.TargetSender, a.names.isOwn(j), ""
+			row.Sender, row.FromMe = pm.SenderJID, pm.FromMe
+		}
+	}
 	text := archive.DeletedByThem
-	if pm.FromMe {
+	if deletedByMe && pm.FromMe {
 		text = archive.DeletedByMe
 	}
 	a.media.forget(c.JID(), pm.ID)

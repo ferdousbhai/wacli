@@ -61,6 +61,7 @@ type ParsedMessage struct {
 	ReactionEmoji string
 	Edited        bool
 	Revoked       bool
+	TargetSender  string // an edit or delete of someone else's message: its sender
 	Call          *ParsedCallEvent
 	// UnhandledPayload names the populated waE2E.Message field when parsing
 	// extracted no content at all. Empty when the message was understood.
@@ -253,6 +254,10 @@ func applyProtocolKey(key *waProto.MessageKey, pm *ParsedMessage) {
 	}
 	if id := strings.TrimSpace(key.GetID()); id != "" {
 		pm.ID = id
+	}
+	if !key.GetFromMe() {
+		// Someone else's message (an admin deleting it): its sender.
+		pm.TargetSender = strings.TrimSpace(key.GetParticipant())
 	}
 }
 

@@ -511,7 +511,7 @@ func (c *Chat) read() error {
 	c.entries = SplitEntries(string(data))
 	sep := []byte(EntrySep)
 	// Converted to Unix line endings: no append to tell apart.
-	unix := !bytes.Contains(data, sep) && bytes.Contains(data, []byte("\n")) && !bytes.HasSuffix(data, []byte("\r"))
+	unix := !bytes.Contains(data, sep) && bytes.HasSuffix(data, []byte("\n"))
 	if c.torn && !unix {
 		// Part of an append (one write of a whole line, after its index
 		// row). Cut before its final "\n" the line is whole. A fragment
@@ -532,6 +532,22 @@ func (c *Chat) read() error {
 			c.entries = SplitEntries(string(data))
 		case len(c.rows) >= len(c.entries):
 			c.rows = c.rows[:len(c.rows)-1]
+		}
+	}
+	if unix && len(c.rows) > 0 && len(c.entries) > len(c.rows) {
+		// Every line that looks like a header started an entry, also one
+		// quoted inside a message. If every row pairs and only the extra
+		// lines don't, those lines belong to the message before them.
+		if rows := c.realign(c.entries); paired(rows) == len(c.rows) {
+			var entries []string
+			for i, e := range c.entries {
+				if i > 0 && strings.HasPrefix(rows[i].ID, "repair:") {
+					entries[len(entries)-1] += "\n" + e
+					continue
+				}
+				entries = append(entries, e)
+			}
+			c.entries = entries
 		}
 	}
 	c.torn = c.torn || indexTorn(c.indexPath())

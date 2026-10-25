@@ -660,3 +660,35 @@ func TestRedeliveryFillsAnEntryArchivedEmpty(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func revoke(id, participant string) *waE2E.Message {
+	key := &waCommon.MessageKey{RemoteJID: proto.String(group), ID: proto.String(id)}
+	if participant == "" {
+		key.FromMe = proto.Bool(true)
+	} else {
+		key.Participant = proto.String(participant)
+	}
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_REVOKE.Enum(), Key: key}}
+}
+
+func TestAdminDeletesKeepTheSender(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, dana, "G1", false, t0, text("spam")))
+	a.handle(live(group, me, "R1", true, t0+10, revoke("G1", dana))) // you, as admin
+	a.handle(live(group, dana, "R2", false, t0+20, revoke("G2", me))) // Dana, as admin, deletes yours (never seen)
+	got := chatFile(t, ar, group)
+	if !strings.Contains(got, "Dana Putri: ‎This message was deleted.\r\n") || strings.Contains(got, "You deleted") ||
+		!strings.Contains(got, "] Alex: ‎This message was deleted.\r\n") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDeletedMessagesFromHistory(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	stub := web(group, "H1", dana, false, t0, nil)
+	stub.Message.MessageStubType = waWeb.WebMessageInfo_REVOKE.Enum()
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", stub))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:33] Dana Putri: ‎This message was deleted.\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
