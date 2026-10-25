@@ -17,6 +17,9 @@ func contextInfoForMessage(m *waProto.Message) *waProto.ContextInfo {
 	if vid := m.GetVideoMessage(); vid != nil {
 		return vid.GetContextInfo()
 	}
+	if ptv := m.GetPtvMessage(); ptv != nil {
+		return ptv.GetContextInfo()
+	}
 	if aud := m.GetAudioMessage(); aud != nil {
 		return aud.GetContextInfo()
 	}

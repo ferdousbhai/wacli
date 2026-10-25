@@ -46,6 +46,12 @@ type pendingMedia struct {
 
 func (p pendingMedia) key() string { return p.Chat + "|" + p.ID }
 
+// giveUp keeps only what blocks a requeue and names the file (for document
+// labels): the keys to fetch it are never used again.
+func (p *pendingMedia) giveUp() {
+	*p = pendingMedia{Chat: p.Chat, ID: p.ID, Name: p.Name, Type: p.Type, Gone: p.Gone, GaveUp: true, NextTry: never}
+}
+
 type mediaQueue struct {
 	a    *Archiver
 	path string
@@ -99,7 +105,7 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 		}
 		for _, p := range list {
 			if p.Gone && !p.GaveUp {
-				p.GaveUp, p.NextTry = true, never // from versions that kept these
+				p.giveUp() // from versions that kept these
 			}
 			q.items[p.key()] = p // NextTry kept: a restart doesn't ask the phone again early
 		}
@@ -493,10 +499,10 @@ func (q *mediaQueue) failed(p *pendingMedia, err error, askedPhone bool) {
 	case p.Gone:
 		// The entry stays "… omitted", as in an export without that file.
 		q.a.logf("media no longer on the phone, giving up: %s", p.Name)
-		cur.GaveUp, cur.NextTry = true, never
+		cur.giveUp()
 	case cur.Attempts > len(retryAfter):
 		q.a.logf("media download failed %d times (%v), giving up: %s", cur.Attempts, err, p.Name)
-		cur.GaveUp, cur.NextTry = true, never
+		cur.giveUp()
 	default:
 		cur.NextTry = time.Now().Add(retryAfter[cur.Attempts-1])
 		if cur.Attempts == 1 {

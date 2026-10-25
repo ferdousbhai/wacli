@@ -22,7 +22,11 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 		}
 	}
 
-	if vid := m.GetVideoMessage(); vid != nil {
+	vid := m.GetVideoMessage()
+	if vid == nil {
+		vid = m.GetPtvMessage() // a video note (round video)
+	}
+	if vid != nil {
 		if pm.Text == "" {
 			pm.Text = vid.GetCaption()
 		}

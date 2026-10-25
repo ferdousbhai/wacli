@@ -882,3 +882,22 @@ func TestGivenUpMediaIsNotRequeuedByARedelivery(t *testing.T) {
 		t.Errorf("given-up media queued again: %d", n)
 	}
 }
+
+func TestVideoNotesAreArchivedAndBlankOnesRepaired(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	ptv := &waE2E.Message{PtvMessage: &waE2E.VideoMessage{
+		DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32),
+		FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32), FileLength: proto.Uint64(10),
+	}}
+	a.handle(live(group, dana, "V1", false, t0, ptv))
+	if got := chatFile(t, ar, group); !strings.Contains(got, "video omitted") || a.PendingMedia() != 1 {
+		t.Errorf("video note: %q, pending %d", got, a.PendingMedia())
+	}
+	// One archived empty by an older version is filled in on redelivery.
+	c, _ := ar.Chat(group)
+	c.Insert(archive.Row{ID: "V2", TS: t0 + 60, Sender: dana}, func(int) archive.Entry { return archive.Entry{Sender: "Dana Putri"} })
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, group, "Maya", web(group, "V2", dana, false, t0+60, ptv)))
+	if got := chatFile(t, ar, group); strings.Count(got, "video omitted") != 2 || a.PendingMedia() != 2 {
+		t.Errorf("blank video note not repaired: %q, pending %d", got, a.PendingMedia())
+	}
+}

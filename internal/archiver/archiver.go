@@ -355,7 +355,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.wrote(b, c, err)
 		return
 	case c.Has(pm.ID):
-		a.requeueMedia(c, pm)
+		a.requeueMedia(ctx, b, c, pm)
 		a.fillBlank(ctx, b, c, pm)
 		return
 	}
@@ -391,12 +391,32 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 // requeueMedia queues a redelivered media message whose entry is still
 // "omitted" but whose download isn't queued: a crash between writing the
 // entry and saving the queue would otherwise leave it omitted forever.
-func (a *Archiver) requeueMedia(c *archive.Chat, pm wa.ParsedMessage) {
+func (a *Archiver) requeueMedia(ctx context.Context, b *batch, c *archive.Chat, pm wa.ParsedMessage) {
 	if pm.Media == nil || pm.Location != nil || !archive.Downloadable(pm.Media.Type) || a.media.queued(c.JID(), pm.ID) {
 		return
 	}
-	if e, ok := c.Get(pm.ID); !ok || e.Omitted == "" || e.Deleted != "" {
+	e, ok := c.Get(pm.ID)
+	if !ok || e.Deleted != "" || e.Attachment != "" {
 		return
+	}
+	if e.Omitted == "" {
+		// Archived empty by a version that couldn't read this media kind
+		// (e.g. video notes): fill it in as omitted, then download.
+		if e.Text != "" || e.System {
+			return
+		}
+		fill := a.entryFor(ctx, pm, "")
+		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
+			if e.Text != "" || e.System || e.Omitted != "" || e.Attachment != "" || e.Deleted != "" {
+				return false
+			}
+			e.Text, e.DocLabel, e.Omitted = fill.Text, fill.DocLabel, archive.OmittedText(pm.Media.Type)
+			return true
+		})
+		a.wrote(b, c, err)
+		if err != nil {
+			return
+		}
 	}
 	a.media.add(c, pm, archive.AttachmentName(c.Position(pm.ID), pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename))
 	a.media.flush()
