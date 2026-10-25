@@ -113,7 +113,7 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	}
 	window := int64(matchWindow / time.Second)
 	bestID, bestD := "", window+1
-	for _, t := range []int64{in.Time.Unix(), earlierReading(in, c.a.opts.DateFormat).Unix()} {
+	for _, t := range []int64{in.Time.Unix(), otherReading(in, c.a.opts.DateFormat).Unix()} {
 		c.findAt(in, t, window, used, &bestID, &bestD)
 	}
 	return bestID, bestID != ""

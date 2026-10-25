@@ -419,17 +419,23 @@ func truncateName(name string, max int) string {
 	return string(stem[:max]) + ext
 }
 
-// earlierReading returns the earlier instant a time in the hour a DST
-// fall-back repeats can mean (Parse picks the later one), or e.Time.
-func earlierReading(e Entry, dateFormat string) time.Time {
-	start, _ := e.Time.ZoneBounds()
-	if start.IsZero() || e.Time.Sub(start) >= 2*time.Hour {
-		return e.Time
-	}
+// otherReading returns the other instant a time in the hour a DST
+// fall-back repeats can mean (Parse picks one of the two, which one depends
+// on the zone), or e.Time.
+func otherReading(e Entry, dateFormat string) time.Time {
+	start, end := e.Time.ZoneBounds()
 	_, now := e.Time.Zone()
-	_, before := start.Add(-time.Second).Zone()
-	if alt := e.Time.Add(-time.Duration(before-now) * time.Second); before > now && alt.Format(dateFormat) == e.stamp {
-		return alt
+	if !start.IsZero() && e.Time.Sub(start) < 2*time.Hour { // just after a transition: maybe the later reading
+		_, before := start.Add(-time.Second).Zone()
+		if alt := e.Time.Add(-time.Duration(before-now) * time.Second); before > now && alt.Format(dateFormat) == e.stamp {
+			return alt
+		}
+	}
+	if !end.IsZero() && end.Sub(e.Time) <= 2*time.Hour { // just before one: maybe the earlier reading
+		_, after := end.Zone()
+		if alt := e.Time.Add(time.Duration(now-after) * time.Second); now > after && alt.Format(dateFormat) == e.stamp {
+			return alt
+		}
 	}
 	return e.Time
 }

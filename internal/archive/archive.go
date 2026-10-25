@@ -699,7 +699,7 @@ func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Locati
 		ts := lastTS
 		if e, err := Parse(raw, dateFormat, loc); err == nil {
 			ts = e.Time.Unix()
-			alts[i] = earlierReading(e, dateFormat).Unix()
+			alts[i] = otherReading(e, dateFormat).Unix()
 		} else {
 			alts[i] = ts
 		}
@@ -755,7 +755,7 @@ func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Locati
 		}
 		offset, known = rows[match].TS-ts, true
 		if rows[match].TS == alts[i] {
-			offset = 0 // paired at the earlier reading of a repeated hour
+			offset = 0 // paired at the other reading of a repeated hour
 		}
 		next = match + 1
 	}
