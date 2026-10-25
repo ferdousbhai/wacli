@@ -65,8 +65,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	}
 	target := r.Chat
 	if target == "" {
-		name := strings.TrimSuffix(filepath.Base(r.File), filepath.Ext(r.File))
-		target = strings.TrimPrefix(name, "WhatsApp Chat - ")
+		target = exportChatName(r.File)
 	}
 	jid, err := resolveChat(ar, target)
 	if err != nil {
@@ -86,6 +85,17 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	}
 	return fmt.Sprintf("%s: %d already archived, %d added, %d attachments restored",
 		filepath.Base(c.Dir()), res.Matched, res.Added, res.MediaRestored), nil
+}
+
+// exportChatName is the chat name in an export's file or folder name
+// ("WhatsApp Chat - Dr. Smith.zip" → "Dr. Smith"); only ".zip" is an
+// extension, so a dot in the name stays.
+func exportChatName(path string) string {
+	name := filepath.Base(strings.TrimRight(path, string(filepath.Separator)))
+	if strings.EqualFold(filepath.Ext(name), ".zip") {
+		name = name[:len(name)-len(".zip")]
+	}
+	return strings.TrimPrefix(name, "WhatsApp Chat - ")
 }
 
 // maxImportFile is WhatsApp's own limit for a shared file.

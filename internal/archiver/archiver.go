@@ -137,8 +137,25 @@ func (a *Archiver) touch() { a.lastActivity.Store(time.Now().UnixNano()) }
 // PendingMedia is the number of attachments still to download.
 func (a *Archiver) PendingMedia() int { return a.media.len() }
 
-// WaitMedia blocks until the media queue is drained or ctx ends.
-func (a *Archiver) WaitMedia(ctx context.Context) { a.media.wait(ctx) }
+// MediaMark notes what is queued now; WaitMediaSince waits for downloads
+// queued after it, so a one-shot command waits for its own files only.
+func (a *Archiver) MediaMark() map[string]bool { return a.media.keys() }
+
+// WaitMediaSince blocks until downloads queued after mark are done (or have
+// failed and are backing off), or ctx ends.
+func (a *Archiver) WaitMediaSince(ctx context.Context, mark map[string]bool) {
+	added := map[string]bool{}
+	for k := range a.media.keys() {
+		if !mark[k] {
+			added[k] = true
+		}
+	}
+	a.media.wait(ctx, added)
+}
+
+// WaitMedia blocks until everything downloadable now is downloaded, or ctx
+// ends (auth and sync wait for the whole queue).
+func (a *Archiver) WaitMedia(ctx context.Context) { a.WaitMediaSince(ctx, nil) }
 
 func (a *Archiver) handle(evt any) {
 	a.handling.RLock()

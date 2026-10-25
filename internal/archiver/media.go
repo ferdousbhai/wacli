@@ -189,10 +189,18 @@ func (q *mediaQueue) run(ctx context.Context) {
 	defer close(jobs)
 	for {
 		for _, p := range q.due() {
-			select {
-			case jobs <- p:
-			case <-ctx.Done():
-				return
+			// A backlog takes a while to hand out; keep writing finished
+			// downloads and the queue meanwhile.
+			for sent := false; !sent; {
+				select {
+				case jobs <- p:
+					sent = true
+				case <-save.C:
+					q.settle()
+					q.flush()
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 		select {
@@ -264,14 +272,26 @@ func (q *mediaQueue) take(now time.Time) []*pendingMedia {
 	return out
 }
 
-// wait returns once nothing is downloadable right now.
-func (q *mediaQueue) wait(ctx context.Context) {
+// keys returns the queued items' keys.
+func (q *mediaQueue) keys() map[string]bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make(map[string]bool, len(q.items))
+	for k := range q.items {
+		out[k] = true
+	}
+	return out
+}
+
+// wait returns once none of the given items is still queued (downloaded and
+// written, given up, or backing off after a failure), or ctx ends.
+func (q *mediaQueue) wait(ctx context.Context, keys map[string]bool) {
 	for {
+		busy := false
 		q.mu.Lock()
-		busy := len(q.active) > 0
 		now := time.Now()
-		for _, p := range q.items {
-			if !now.Before(p.NextTry) {
+		for k := range keys {
+			if p, ok := q.items[k]; ok && !now.Before(p.NextTry) {
 				busy = true
 			}
 		}

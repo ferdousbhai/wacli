@@ -676,3 +676,50 @@ func TestPosition(t *testing.T) {
 		t.Errorf("positions %d %d %d", c.Position("A"), c.Position("B"), c.Position("X"))
 	}
 }
+
+func TestSameFileSentTwiceGetsTwoFiles(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	omitted := func(int) Entry { return Entry{Sender: "Dana", Omitted: "document omitted"} }
+	c.Insert(Row{ID: "NEW", TS: 2}, omitted)
+	c.Insert(Row{ID: "OLD", TS: 1}, omitted) // older, arrives later, same number
+	put := func(id string) string {
+		src := filepath.Join(t.TempDir(), id)
+		os.WriteFile(src, []byte("same pdf"), 0o600)
+		name, err := c.PlaceAttachment(id, src, "00000000-doc.pdf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	if a1, a2 := put("NEW"), put("OLD"); a1 == a2 {
+		t.Fatalf("both entries point at %s", a1)
+	}
+	c.MarkDeleted("NEW", DeletedByThem)
+	e, _ := c.Get("OLD")
+	if _, err := os.Stat(filepath.Join(c.Dir(), e.Attachment)); err != nil {
+		t.Errorf("deleting one took the other's file: %v", err)
+	}
+}
+
+func TestDeletedMediaLeftByACrashIsMovedOnLoad(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, func(int) Entry { return Entry{Sender: "Dana", Attachment: "00000000-PHOTO.jpg"} })
+	os.WriteFile(filepath.Join(c.Dir(), "00000000-PHOTO.jpg"), []byte("x"), 0o600)
+	// Crash between writing the "deleted" entry and moving the file.
+	c.Update("A", func(e *Entry) bool { e.MakeDeleted(DeletedByThem); return true })
+	a.UpdateInfo("1@s.whatsapp.net", func(ci *ChatInfo) { ci.DeletedMedia = []string{"00000000-PHOTO.jpg"} })
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	if _, err := b.Chat("1@s.whatsapp.net"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "WhatsApp Chat - Dana", "00000000-PHOTO.jpg")); !os.IsNotExist(err) {
+		t.Error("deleted media still in the chat folder")
+	}
+	if info, _ := b.Info("1@s.whatsapp.net"); len(info.DeletedMedia) != 0 {
+		t.Errorf("list not cleared: %v", info.DeletedMedia)
+	}
+}

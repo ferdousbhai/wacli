@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,10 @@ type ChatInfo struct {
 	NeedsNames bool `json:"needs_names,omitempty"`
 	// PrevFolder is set while a rename is in flight; Open finishes it.
 	PrevFolder string `json:"prev_folder,omitempty"`
+	// DeletedMedia lists attachments of messages deleted for everyone that
+	// still have to leave the chat folder (kept here so a crash can't
+	// strand them there).
+	DeletedMedia []string `json:"deleted_media,omitempty"`
 }
 
 type Archive struct {
@@ -191,8 +196,9 @@ func (a *Archive) UpdateInfo(jid string, fn func(*ChatInfo)) error {
 		return fmt.Errorf("unknown chat %s", jid)
 	}
 	before := *info
+	before.DeletedMedia = append([]string(nil), info.DeletedMedia...)
 	fn(info)
-	if *info == before {
+	if reflect.DeepEqual(*info, before) {
 		return nil
 	}
 	return a.saveMetaLocked()
@@ -212,10 +218,17 @@ func (a *Archive) saveMetaLocked() error {
 // Chat returns an existing chat.
 func (a *Archive) Chat(jid string) (*Chat, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.chatLocked(jid)
+	c, err := a.chatLocked(jid)
+	a.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return c, c.ensureLoaded()
 }
 
+// chatLocked returns the chat's single Chat value, creating it unloaded. It
+// is loaded under its own lock after a.mu is released (ensureLoaded), so the
+// lock order stays chat before archive everywhere.
 func (a *Archive) chatLocked(jid string) (*Chat, error) {
 	if c, ok := a.chats[jid]; ok {
 		return c, nil
@@ -225,12 +238,6 @@ func (a *Archive) chatLocked(jid string) (*Chat, error) {
 		return nil, fmt.Errorf("unknown chat %s", jid)
 	}
 	c := &Chat{a: a, info: info}
-	c.mu.Lock()
-	err := c.useLocked()
-	c.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
 	a.chats[jid] = c
 	return c, nil
 }
@@ -254,28 +261,39 @@ func (a *Archive) Trim(idle time.Duration) {
 	}
 }
 
+func (c *Chat) ensureLoaded() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.useLocked()
+}
+
 // EnsureChat returns the chat, creating its folder on first use. suffix
 // disambiguates the folder when another chat already uses the name.
 func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, ok := a.meta[jid]; ok {
-		c, err := a.chatLocked(jid)
-		return c, false, err
-	}
-	if a.opts.ReadOnly {
-		return nil, false, ErrReadOnly
-	}
-	folder := a.freeFolderLocked(name, suffix, jid, "")
-	if err := os.MkdirAll(a.path(folder), 0o700); err != nil {
-		return nil, false, err
-	}
-	a.meta[jid] = &ChatInfo{JID: jid, Folder: folder, Name: name, Kind: kind}
-	if err := a.saveMetaLocked(); err != nil {
-		return nil, false, err
+	_, existed := a.meta[jid]
+	if !existed {
+		if a.opts.ReadOnly {
+			a.mu.Unlock()
+			return nil, false, ErrReadOnly
+		}
+		folder := a.freeFolderLocked(name, suffix, jid, "")
+		if err := os.MkdirAll(a.path(folder), 0o700); err != nil {
+			a.mu.Unlock()
+			return nil, false, err
+		}
+		a.meta[jid] = &ChatInfo{JID: jid, Folder: folder, Name: name, Kind: kind}
+		if err := a.saveMetaLocked(); err != nil {
+			a.mu.Unlock()
+			return nil, false, err
+		}
 	}
 	c, err := a.chatLocked(jid)
-	return c, true, err
+	a.mu.Unlock()
+	if err != nil {
+		return nil, false, err
+	}
+	return c, !existed, c.ensureLoaded()
 }
 
 // freeFolderLocked picks a folder name for name that no other chat or file
@@ -389,12 +407,10 @@ type Chat struct {
 	// pending holds entries inserted during a Hold until they are merged.
 	pending     []pendingEntry
 	pendingByID map[string]int
-	pendingTS   []int64 // pending timestamps, newest first
-	// deletedFiles are attachments of deleted entries, moved out of the
-	// chat folder once the change is written.
-	deletedFiles []string
-	loaded       bool      // rows and entries are in memory (see Trim)
-	lastUsed     time.Time // for Trim
+	pendingTS   []int64   // pending timestamps, newest first
+	missing     bool      // read found no _chat.txt
+	loaded      bool      // rows and entries are in memory (see Trim)
+	lastUsed    time.Time // for Trim
 }
 
 // useLocked loads the chat if Trim unloaded it, and notes the use.
@@ -440,16 +456,36 @@ func (c *Chat) problem(format string, args ...any) {
 }
 
 func (c *Chat) load() error {
+	err := c.read()
+	if err == nil && c.a.opts.ReadOnly && len(c.rows) != len(c.entries) {
+		// A reader can catch sync between its two writes; look again
+		// before calling it a problem.
+		time.Sleep(100 * time.Millisecond)
+		err = c.read()
+	}
+	if err != nil {
+		return err
+	}
+	return c.reconcile()
+}
+
+// read loads _chat.txt and the index as they are on disk.
+func (c *Chat) read() error {
 	data, err := os.ReadFile(c.chatPath())
 	missing := errors.Is(err, os.ErrNotExist)
 	if err != nil && !missing {
 		return err
 	}
 	c.entries = SplitEntries(string(data))
-	if c.rows, err = readIndex(c.indexPath()); err != nil {
-		return err
-	}
-	if missing && len(c.rows) > 0 {
+	c.missing = missing
+	c.rows, err = readIndex(c.indexPath())
+	return err
+}
+
+// reconcile repairs what read found: a missing _chat.txt, an index out of
+// step, deleted media a crash left in the folder.
+func (c *Chat) reconcile() error {
+	if c.missing && len(c.rows) > 0 {
 		// The folder was moved or deleted outside wacli. Keep the old index
 		// aside and start the chat over, so new messages still land.
 		c.problem("%s: _chat.txt was missing; started it again (old index kept as %s.orphaned-<time>)", c.info.Folder, filepath.Base(c.indexPath()))
@@ -476,6 +512,9 @@ func (c *Chat) load() error {
 		}
 	}
 	c.reindex()
+	if !c.a.opts.ReadOnly {
+		c.moveDeletedLocked()
+	}
 	return nil
 }
 
@@ -775,7 +814,7 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 		return "", err
 	}
 	name := filepath.Base(want)
-	if sameFile(filepath.Join(dir, name), src) {
+	if !c.referencedLocked(name) && sameFile(filepath.Join(dir, name), src) {
 		if err := os.Remove(src); err != nil {
 			return "", err
 		}
@@ -791,8 +830,29 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 	return name, nil
 }
 
+// referencedLocked reports whether any entry has name as its attachment.
+func (c *Chat) referencedLocked(name string) bool {
+	tag := attachOpen + name + ">"
+	for _, e := range c.entries {
+		if strings.Contains(e, tag) {
+			return true
+		}
+	}
+	for _, p := range c.pending {
+		if strings.Contains(p.text, tag) {
+			return true
+		}
+	}
+	return false
+}
+
 // sameFile reports whether files a and b both exist with equal content.
 func sameFile(a, b string) bool {
+	ia, err1 := os.Stat(a)
+	ib, err2 := os.Stat(b)
+	if err1 != nil || err2 != nil || ia.Size() != ib.Size() {
+		return false
+	}
 	sa, ok := fileSHA256(a)
 	if !ok {
 		return false
@@ -846,29 +906,48 @@ func (c *Chat) MarkDeleted(id, text string) (bool, error) {
 		return exists, err
 	}
 	if file != "" {
-		c.deletedFiles = append(c.deletedFiles, file)
+		// Recorded before the entry is written, moved after (moveDeletedLocked).
+		c.a.mu.Lock()
+		c.info.DeletedMedia = append(c.info.DeletedMedia, file)
+		err := c.a.saveMetaLocked()
+		c.a.mu.Unlock()
+		if err != nil {
+			return true, err
+		}
 	}
 	return true, c.saveLocked()
 }
 
-// moveDeletedLocked moves media of deleted entries out of the chat folder;
-// flushLocked calls it after writing.
+// moveDeletedLocked moves media of deleted entries out of the chat folder,
+// once nothing on disk refers to it any more. It runs after every write and
+// when a chat loads, so a crash in between only delays it.
 func (c *Chat) moveDeletedLocked() {
-	if len(c.deletedFiles) == 0 {
+	if len(c.info.DeletedMedia) == 0 || c.dirty {
 		return
 	}
 	dst := c.deletedDirLocked()
-	if err := os.MkdirAll(dst, 0o700); err != nil {
-		return // stays put; tried again on the next write
-	}
 	var left []string
-	for _, f := range c.deletedFiles {
+	for _, f := range c.info.DeletedMedia {
+		if c.referencedLocked(f) {
+			left = append(left, f) // the "deleted" entry isn't written yet
+			continue
+		}
+		if err := os.MkdirAll(dst, 0o700); err != nil {
+			left = append(left, f)
+			continue
+		}
 		err := os.Rename(filepath.Join(c.dirLocked(), f), filepath.Join(dst, f))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			left = append(left, f)
 		}
 	}
-	c.deletedFiles = left
+	if len(left) == len(c.info.DeletedMedia) {
+		return
+	}
+	c.a.mu.Lock()
+	c.info.DeletedMedia = left
+	_ = c.a.saveMetaLocked() // if this fails, the next pass finds the files gone
+	c.a.mu.Unlock()
 }
 
 // Position returns the entry's 0-based position in the chat, or -1.
