@@ -1016,3 +1016,31 @@ func TestBOMAndEchoedLine(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestPastedHeaderInsideMessageSurvivesCrashRepair(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "m1", TS: 100}, text("hi"))
+	c.Insert(Row{ID: "m2", TS: 200}, text("look:\n[2025-01-01, 10:00:00] Bob: hello")) // pasted
+	c.Insert(Row{ID: "m3", TS: 300}, text("bye"))
+	before, _ := os.ReadFile(c.chatPath())
+	appendFile(c.indexPath(), formatRow(Row{ID: "m4", TS: 400})) // crash between the two appends
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if got, _ := os.ReadFile(c2.chatPath()); string(got) != string(before) {
+		t.Errorf("_chat.txt changed:\n%q", got)
+	}
+	e, _ := c2.Get("m2")
+	if !strings.Contains(e.Text, "Bob: hello") || c2.Position("m3") != 2 {
+		t.Errorf("m2 %q, m3 at %d", e.Text, c2.Position("m3"))
+	}
+}
+
+func TestTrailingNewlineOfLastMessageIsKept(t *testing.T) {
+	got := SplitEntries("[1970-01-01, 00:00:01] Dana: a\r\n[1970-01-01, 00:00:02] Dana: last\n\r\n")
+	if len(got) != 2 || got[1] != "[1970-01-01, 00:00:02] Dana: last\n" {
+		t.Errorf("got %q", got)
+	}
+}

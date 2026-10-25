@@ -229,8 +229,11 @@ func SplitLines(content string) []string {
 
 func splitOn(content, sep string) []string {
 	content = strings.TrimPrefix(content, "\ufeff") // a BOM an editor added
-	content = strings.TrimSuffix(content, sep)
-	content = strings.TrimSuffix(content, "\n") // e.g. a line added with echo
+	if rest, ok := strings.CutSuffix(content, sep); ok {
+		content = rest // a "\n" before it belongs to the last message
+	} else {
+		content = strings.TrimSuffix(content, "\n") // e.g. a line added with echo
+	}
 	if content == "" {
 		return nil
 	}

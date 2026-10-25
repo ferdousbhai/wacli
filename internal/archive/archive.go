@@ -414,6 +414,7 @@ type Chat struct {
 	pendingTS   []int64   // pending timestamps, newest first
 	missing     bool      // read found no _chat.txt
 	torn        bool      // read found a last line cut short
+	resplit     bool      // read split _chat.txt at header lines; realign the index
 	loaded      bool      // rows and entries are in memory (see Trim)
 	lastUsed    time.Time // for Trim
 }
@@ -492,13 +493,27 @@ func (c *Chat) read() error {
 	c.torn = c.torn || indexTorn(c.indexPath())
 	if len(c.rows) > len(c.entries) {
 		// Line endings mixed by an edit can merge entries; splitting at
-		// every header line recovers them (only when the index says there
-		// are more, so a header-like line inside a message stays put).
-		if alt := SplitLines(string(data)); len(alt) > len(c.entries) && len(alt) <= len(c.rows) {
-			c.entries, c.torn = alt, true
+		// every header line recovers them. But extra rows also come from a
+		// crash between the two appends, and then a header-like line pasted
+		// inside a message must stay put: the line split is used only if
+		// strictly more rows pair up with it.
+		if alt := SplitLines(string(data)); len(alt) > len(c.entries) && len(alt) <= len(c.rows) &&
+			paired(alt, c.rows, c.a.opts) > paired(c.entries, c.rows, c.a.opts) {
+			c.entries, c.torn, c.resplit = alt, true, true
 		}
 	}
 	return nil
+}
+
+// paired counts the entries realign gives a real row.
+func paired(entries []string, rows []Row, opts Options) int {
+	n := 0
+	for _, r := range realign(entries, rows, opts.DateFormat, opts.Location) {
+		if !strings.HasPrefix(r.ID, "repair:") {
+			n++
+		}
+	}
+	return n
 }
 
 // indexTorn reports whether the index file's last row lacks its newline.
@@ -534,9 +549,10 @@ func (c *Chat) reconcile() error {
 		}
 		c.rows = nil
 	}
-	if len(c.rows) != len(c.entries) {
+	if len(c.rows) != len(c.entries) || c.resplit {
 		// A crash between writing _chat.txt and its index, a failed write,
 		// or a hand edit. Never refuse the chat: new messages must land.
+		c.resplit = false
 		before := len(c.rows)
 		c.rows = realign(c.entries, c.rows, c.a.opts.DateFormat, c.a.opts.Location)
 		c.problem("%s: index rebuilt (%d entries, had %d rows)", c.info.Folder, len(c.entries), before)
