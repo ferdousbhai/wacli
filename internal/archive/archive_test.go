@@ -914,3 +914,52 @@ func TestRealignOtherZoneBehindABigCrashedBatch(t *testing.T) {
 		t.Errorf("wrong %d, lost %d", wrong, lost)
 	}
 }
+
+func TestTornLastLinesAreRewrittenBeforeTheNextAppend(t *testing.T) {
+	for _, tear := range []string{"index", "chat"} {
+		root := t.TempDir()
+		a, _ := Open(Options{Root: root, Location: time.UTC})
+		c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+		c.Insert(Row{ID: "A", TS: 100}, text("a"))
+		c.Insert(Row{ID: "B", TS: 200}, text("hello"))
+		// Power loss mid-append of a third message: half a line on disk.
+		if tear == "index" {
+			appendFile(c.indexPath(), "C")
+		} else {
+			appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: hel")
+		}
+		b, _ := Open(Options{Root: root, Location: time.UTC})
+		c2, err := b.Chat("1@s.whatsapp.net")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c2.Insert(Row{ID: "D", TS: 400}, text("d"))
+		got := chatText(t, c2)
+		if !strings.HasSuffix(got, "[1970-01-01, 00:06:40] Dana: d\r\n") || strings.Contains(got, "hel[") {
+			t.Errorf("%s: _chat.txt %q", tear, got)
+		}
+		cc, _ := Open(Options{Root: root, Location: time.UTC})
+		c3, _ := cc.Chat("1@s.whatsapp.net")
+		if !c3.Has("D") || c3.Has("CD") {
+			t.Errorf("%s: rows %+v", tear, c3.Rows())
+		}
+	}
+}
+
+func TestRealignHandAddedFirstLineTakesNoOtherID(t *testing.T) {
+	var rows []Row
+	var entries, truth []string
+	entries = append(entries, Render(Entry{Time: time.Unix(1_700_000_000, 0).UTC(), Sender: "Me", Text: "note"}, DefaultDateFormat))
+	truth = append(truth, "none")
+	ts := int64(1_700_000_000)
+	for i := range 300 {
+		ts += 30 // a row lands every 15 minutes on a 900 s step from the note
+		id := fmt.Sprintf("m%d", i)
+		rows = append(rows, Row{ID: id, TS: ts})
+		entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).UTC(), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+		truth = append(truth, id)
+	}
+	if wrong, lost := realignScore(realign(entries, rows, DefaultDateFormat, time.UTC), truth); wrong+lost != 0 {
+		t.Errorf("wrong %d, lost %d", wrong, lost)
+	}
+}

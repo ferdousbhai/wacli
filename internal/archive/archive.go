@@ -413,6 +413,7 @@ type Chat struct {
 	pendingByID map[string]int
 	pendingTS   []int64   // pending timestamps, newest first
 	missing     bool      // read found no _chat.txt
+	torn        bool      // read found a last line cut short
 	loaded      bool      // rows and entries are in memory (see Trim)
 	lastUsed    time.Time // for Trim
 }
@@ -482,8 +483,30 @@ func (c *Chat) read() error {
 	}
 	c.entries = SplitEntries(string(data))
 	c.missing = missing
-	c.rows, err = readIndex(c.indexPath())
-	return err
+	// A last line cut short (power loss, full disk mid-append) would get
+	// the next append glued onto it; reconcile rewrites such files whole.
+	c.torn = len(data) > 0 && !strings.HasSuffix(string(data), EntrySep)
+	if c.rows, err = readIndex(c.indexPath()); err != nil {
+		return err
+	}
+	c.torn = c.torn || indexTorn(c.indexPath())
+	return nil
+}
+
+// indexTorn reports whether the index file's last row lacks its newline.
+func indexTorn(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	last := make([]byte, 1)
+	_, err = f.ReadAt(last, info.Size()-1)
+	return err == nil && last[0] != '\n'
 }
 
 // reconcile repairs what read found: a missing _chat.txt, an index out of
@@ -516,6 +539,16 @@ func (c *Chat) reconcile() error {
 		}
 	}
 	c.reindex()
+	if c.torn {
+		c.problem("%s: a line was cut short (crash or full disk); files rewritten", c.info.Folder)
+		c.torn = false
+		if !c.a.opts.ReadOnly {
+			c.dirty = true
+			if err := c.flushLocked(); err != nil {
+				return err
+			}
+		}
+	}
 	if !c.a.opts.ReadOnly {
 		c.moveDeletedLocked()
 	}
@@ -528,8 +561,8 @@ func (c *Chat) reconcile() error {
 // or at the zone shift the previous pair matched at. When neither exists the
 // zone changed (a trip, a daylight-saving night): a row a whole number of
 // 15-minute steps away (at most 26 hours) is taken as the new shift if the
-// next entry pairs at that shift too. Before any shift is known, an
-// unconfirmed step is accepted close by. Rows without entries (a crash
+// next two entries pair at that shift too. Before any shift is known, the
+// first row is also accepted at such a step unconfirmed. Rows without entries (a crash
 // between writing the index and _chat.txt) can come in a run as long as a
 // history batch, so searches reach past them. Entries without a row get one
 // WhatsApp won't recognize; they can no longer be edited or deleted, but the
@@ -559,6 +592,21 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 	out := make([]Row, len(entries))
 	next := 0
 	offset, known := int64(0), false
+	// confirmed reports whether entry i can start a new shift d at row k:
+	// the next entry must not still pair at the current shift (then the
+	// zone didn't change and entry i is the odd one out, e.g. a hand-added
+	// line), and the two entries after i must pair at d after row k (just
+	// the next one at the end of the chat).
+	confirmed := func(k, i int, d int64) bool {
+		if find(next, reach, tss[i+1], 0) >= 0 || (known && find(next, reach, tss[i+1], offset) >= 0) {
+			return false
+		}
+		k2 := find(k+1, reach, tss[i+1], d)
+		if k2 < 0 {
+			return false
+		}
+		return i+2 >= len(tss) || find(k2+1, reach, tss[i+2], d) >= 0
+	}
 	for i, ts := range tss {
 		match := find(next, reach, ts, 0)
 		if known && offset != 0 {
@@ -567,14 +615,12 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 			}
 		}
 		for k := next; match < 0 && i+1 < len(tss) && k < min(len(rows), next+reach); k++ {
-			if d := rows[k].TS - ts; isStep(d) && find(k+1, reach, tss[i+1], d) >= 0 {
-				match = k // a new shift, confirmed by the next entry
+			if d := rows[k].TS - ts; isStep(d) && confirmed(k, i, d) {
+				match = k // a new shift, confirmed by the entries after it
 			}
 		}
-		for k := next; match < 0 && !known && k < min(len(rows), next+64); k++ {
-			if isStep(rows[k].TS - ts) {
-				match = k
-			}
+		if match < 0 && !known && next < len(rows) && isStep(rows[next].TS-ts) {
+			match = next // the whole chat starts shifted; nothing to confirm with
 		}
 		if match < 0 {
 			out[i] = Row{ID: fmt.Sprintf("repair:%d:%d", ts, i), TS: ts}
