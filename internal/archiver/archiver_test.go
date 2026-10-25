@@ -706,3 +706,21 @@ func TestAdminDeletedMessageFromHistory(t *testing.T) {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
 }
+
+func TestGroupRemovalsAndInviteJoins(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, dana, "M1", false, t0, text("hi")))
+	g, _ := types.ParseJID(group)
+	d, _ := types.ParseJID(dana)
+	sam, _ := types.ParseJID("6282222222222@s.whatsapp.net")
+	at := time.Unix(t0, 0)
+	a.handle(&events.GroupInfo{JID: g, Sender: &d, Timestamp: at.Add(time.Second), Leave: []types.JID{sam}})
+	a.handle(&events.GroupInfo{JID: g, Sender: &sam, Timestamp: at.Add(2 * time.Second), Leave: []types.JID{sam}})
+	a.handle(&events.GroupInfo{JID: g, Sender: &sam, Timestamp: at.Add(3 * time.Second), Join: []types.JID{sam}, JoinReason: "invite"})
+	got := chatFile(t, ar, group)
+	for _, want := range []string{"Dana Putri removed +6282222222222\r\n", "+6282222222222 left\r\n", "+6282222222222 joined using this group's invite link\r\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+}

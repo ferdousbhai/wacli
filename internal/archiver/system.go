@@ -69,12 +69,18 @@ func (a *Archiver) archiveStub(ctx context.Context, b *batch, chatID, hint strin
 		text = fmt.Sprintf("%s created group “%s”", actor(), first())
 	case waWeb.WebMessageInfo_GROUP_CHANGE_SUBJECT:
 		text = fmt.Sprintf("%s changed the group name to “%s”", actor(), first())
-	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_ADD, waWeb.WebMessageInfo_GROUP_PARTICIPANT_INVITE:
+	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_ADD:
 		if p := people(); p == "you" {
 			text = "You were added"
 		} else {
 			text = fmt.Sprintf("%s added %s", actor(), p)
 		}
+	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_INVITE:
+		text = joinedByLink(people())
+	case waWeb.WebMessageInfo_GROUP_CHANGE_ICON:
+		text = fmt.Sprintf("%s changed this group's icon", actor())
+	case waWeb.WebMessageInfo_GROUP_CHANGE_DESCRIPTION:
+		text = fmt.Sprintf("%s changed the group description", actor())
 	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_REMOVE:
 		text = fmt.Sprintf("%s removed %s", actor(), people())
 	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_LEAVE:
@@ -130,21 +136,50 @@ func (a *Archiver) archiveGroupInfo(ctx context.Context, v *events.GroupInfo) {
 		// the same change seen twice.
 		return fmt.Sprintf("wacli:%s:%d", kind, v.Timestamp.Unix())
 	}
+	person := func(j types.JID) string {
+		if a.names.isOwn(j) {
+			return "you"
+		}
+		return a.names.contact(ctx, j)
+	}
 	if v.Name != nil {
 		a.names.noteGroup(v.JID.String(), v.Name.Name)
 		a.nameChanged()
 		a.archiveSystem(ctx, nil, v.JID, v.Name.Name, id("subject"), v.Timestamp, actor == "You", "",
 			fmt.Sprintf("%s changed the group name to “%s”", actor, v.Name.Name))
 	}
+	if v.Topic != nil {
+		a.archiveSystem(ctx, nil, v.JID, "", id("topic"), v.Timestamp, actor == "You", "",
+			fmt.Sprintf("%s changed the group description", actor))
+	}
 	for _, j := range v.Join {
-		text := fmt.Sprintf("%s added %s", actor, a.names.contact(ctx, j))
-		if a.names.isOwn(j) {
+		text := fmt.Sprintf("%s added %s", actor, person(j))
+		switch {
+		case v.JoinReason == "invite":
+			text = joinedByLink(person(j))
+		case a.names.isOwn(j):
 			text = "You were added"
 		}
 		a.archiveSystem(ctx, nil, v.JID, "", id("join:"+j.User), v.Timestamp, false, "", text)
 	}
-	for _, j := range v.Leave {
-		a.archiveSystem(ctx, nil, v.JID, "", id("leave:"+j.User), v.Timestamp, false, "",
-			fmt.Sprintf("%s left", a.names.contact(ctx, j)))
+	for _, j := range v.Leave { // whatsmeow puts removals here too
+		text := fmt.Sprintf("%s left", capitalize(person(j)))
+		if v.Sender != nil && v.Sender.User != j.User {
+			text = fmt.Sprintf("%s removed %s", actor, person(j))
+		}
+		a.archiveSystem(ctx, nil, v.JID, "", id("leave:"+j.User), v.Timestamp, false, "", text)
 	}
+}
+
+// joinedByLink is the line for someone joining through the invite link.
+func joinedByLink(who string) string {
+	return capitalize(who) + " joined using this group's invite link"
+}
+
+// capitalize turns "you" into "You" at the start of a line.
+func capitalize(who string) string {
+	if who == "you" {
+		return "You"
+	}
+	return who
 }

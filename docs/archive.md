@@ -12,7 +12,7 @@ messages keep arriving. There is no message database: the folders are the data.
     _chat.txt
     00000012-PHOTO-2025-10-24-05-33-09.jpg
     00000039-Restructuring Invoice - PT. Acme Holding.pdf
-  WhatsApp Chat - Maya (+62 811-0000-0000)/  name collision → number suffix
+  WhatsApp Chat - Maya (+628110000000)/       name collision → number suffix
     _chat.txt
   .wacli/                                     bookkeeping, never needed to read chats
     chats.json                                JID → folder, chat kind, names
@@ -75,6 +75,8 @@ Matched against a real iOS export (`internal/archive/testdata`).
 | Delete for everyone | Entry becomes `‎This message was deleted.`; its media file moves to `.wacli/deleted/`, keeping the chat folder identical to an export. |
 | Reaction, receipt, typing, presence | Ignored. |
 | Group renamed | System entry `‎X changed the group name to “Y”`. The folder keeps its name, so saved paths keep working. |
+| Other group changes, calls | System entries as iOS writes them: created, added, removed, left, joined using the invite link, description or icon changed, missed and finished calls. |
+| Deleted before wacli saw it | `‎This message was deleted.` (or `‎You deleted this message.`) at the original time; a message an admin deleted keeps its sender. |
 | New chat | Folder created. Until the contact's or group's name is known (right after linking) it is named by number; it is renamed once the name arrives. |
 
 Writes during a history sync are batched: each chat is written once per batch,
