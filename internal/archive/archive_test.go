@@ -1078,3 +1078,68 @@ func TestTornLastLineLetsRedeliveryLand(t *testing.T) {
 		t.Errorf("got %q", got) // the cut line is kept; the whole message lands too
 	}
 }
+
+// A multi-line message cut right after one of its inner line breaks.
+func TestTornMultiLineMessageLetsRedeliveryLand(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: line1\n")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("line1\nline2\nline3")) // redelivery
+	if got := chatText(t, c2); !strings.Contains(got, "line3") {
+		t.Errorf("redelivered message dropped; got %q", got)
+	}
+}
+
+// Mixed line endings plus a torn header fragment: the line split glues it back.
+func TestTornFragmentStaysDroppedWithMixedEndings(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	c.Insert(Row{ID: "B", TS: 200}, text("hello"))
+	data, _ := os.ReadFile(c.chatPath())
+	os.WriteFile(c.chatPath(), []byte(strings.Replace(string(data), "\r\n", "\n", 1)), 0o600) // an edit
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:0")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if e, _ := c2.Get("B"); e.Text != "hello" {
+		t.Errorf("B corrupted: %q", e.Text)
+	}
+}
+
+// Cut between the \r and \n of the final separator: the line is whole.
+func TestTornBeforeFinalLFIsWhole(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: hello\r")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("hello"))
+	if got := chatText(t, c2); strings.Count(got, "hello") != 1 || strings.Contains(got, "\r\r") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A line added by hand without a final newline: B is untouched.
+func TestHandAddedLastLineKeepsPreviousID(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	c.Insert(Row{ID: "B", TS: 200}, text("b"))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: note")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if !c2.Has("B") {
+		t.Errorf("B lost its ID: %v", c2.Rows())
+	}
+}
