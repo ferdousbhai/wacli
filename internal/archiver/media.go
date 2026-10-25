@@ -93,8 +93,7 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 			if p.Gone {
 				continue // from versions that kept these
 			}
-			p.NextTry = time.Time{} // retry everything on start
-			q.items[p.key()] = p
+			q.items[p.key()] = p // NextTry kept: a restart doesn't ask the phone again early
 		}
 	}
 	return q, nil
@@ -434,8 +433,9 @@ func (q *mediaQueue) queued(chat, id string) bool {
 	return ok
 }
 
-// maxAttempts bounds retries; with the backoff that is several days.
-const maxAttempts = 12
+// retryAfter is the wait before each retry; after the last one wacli gives
+// up. Most retries ask the phone, so they are few.
+var retryAfter = []time.Duration{15 * time.Minute, 2 * time.Hour}
 
 func (q *mediaQueue) failed(p *pendingMedia, err error) {
 	q.mu.Lock()
@@ -450,11 +450,11 @@ func (q *mediaQueue) failed(p *pendingMedia, err error) {
 		// The entry stays "… omitted", as in an export without that file.
 		q.a.logf("media no longer on the phone, giving up: %s", p.Name)
 		delete(q.items, p.key())
-	case cur.Attempts >= maxAttempts:
+	case cur.Attempts > len(retryAfter):
 		q.a.logf("media download failed %d times (%v), giving up: %s", cur.Attempts, err, p.Name)
 		delete(q.items, p.key())
 	default:
-		cur.NextTry = time.Now().Add(time.Duration(1<<min(cur.Attempts, 10)) * time.Minute)
+		cur.NextTry = time.Now().Add(retryAfter[cur.Attempts-1])
 		if cur.Attempts == 1 {
 			q.a.logf("media download failed (%v), will retry: %s", err, p.Name)
 		}

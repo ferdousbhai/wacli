@@ -576,3 +576,21 @@ func TestUnrecoverableDisconnectsHalt(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaGivesUpAfterThreeTriesAndKeepsItsScheduleAcrossRestarts(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	p := &pendingMedia{Chat: dana, ID: "M1", Name: "00000001-PHOTO-1970-01-01-00-00-00.jpg"}
+	a.media.items[p.key()] = p
+	a.media.failed(p, fmt.Errorf("no answer"))
+	a.media.flush()
+	b, _ := New(ar, nil, nil) // a restart
+	q := b.media.items[p.key()]
+	if q == nil || time.Until(q.NextTry) < 10*time.Minute {
+		t.Fatalf("schedule lost on restart: %+v", q)
+	}
+	b.media.failed(q, fmt.Errorf("no answer"))
+	b.media.failed(q, fmt.Errorf("no answer"))
+	if b.media.len() != 0 {
+		t.Errorf("still queued after three tries")
+	}
+}
