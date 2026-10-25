@@ -103,7 +103,8 @@ func (a *Archiver) RefreshNames(ctx context.Context, all bool) {
 func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved map[string]string) (left int) {
 	c, err := a.ar.Chat(chatJID)
 	if err != nil {
-		return 0
+		a.logf("warning: %v", err)
+		return 1 // unknown: keep the chat flagged for the next pass
 	}
 	own := a.names.own()
 	n, err := c.RenameSenders(func(row archive.Row, sender string) (string, bool) {
@@ -138,6 +139,7 @@ func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved 
 	})
 	if err != nil {
 		a.logf("warning: %v", err)
+		return max(left, 1) // the rename didn't happen; keep the chat flagged
 	} else if n > 0 {
 		a.logf("named %d senders in %s", n, filepath.Base(c.Dir()))
 	}

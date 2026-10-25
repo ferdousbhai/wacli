@@ -304,6 +304,10 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	}
 	sender := a.senderName(ctx, pm)
 	e := a.entryFor(ctx, pm, sender)
+	fallback := a.isFallbackSender(pm, sender)
+	if fallback {
+		a.needsNames(c.JID()) // before the entry is on disk, so a crash can't lose the flag
+	}
 	_, inserted, err := c.Insert(row, func(pos int) archive.Entry {
 		if pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type) {
 			e.Omitted = archive.OmittedText(pm.Media.Type)
@@ -314,9 +318,9 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	})
 	if inserted {
 		a.added.Add(1)
-		// After the insert, so a refresh pass can't clear the flag before
-		// the number-named entry exists (and redeliveries don't flag).
-		if a.isFallbackSender(pm, sender) {
+		// Again after the insert: a refresh pass that read the chat before
+		// the entry existed may have cleared the flag.
+		if fallback {
 			a.needsNames(c.JID())
 		}
 	}
