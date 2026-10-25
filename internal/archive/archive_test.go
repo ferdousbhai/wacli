@@ -756,3 +756,24 @@ func TestDeletionSurvivesAFailedMetaSave(t *testing.T) {
 		t.Error("deletion never written")
 	}
 }
+
+func TestCrashBetweenIndexAndChatWriteDoesNotDuplicate(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "a", TS: 1000}, text("a"))
+	c.Insert(Row{ID: "c", TS: 2000}, text("c"))
+	before, _ := os.ReadFile(c.chatPath())
+	c.Insert(Row{ID: "b", TS: 1100}, text("b")) // full rewrite: index, then _chat.txt
+	os.WriteFile(c.chatPath(), before, 0o600)  // crash before the _chat.txt rename
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "b", TS: 1100}, text("b")) // WhatsApp delivers it again
+	if got := chatText(t, c2); strings.Count(got, "Dana: b") != 1 {
+		t.Errorf("got %q", got)
+	}
+	if c2.Position("c") != 2 {
+		t.Errorf("c at %d", c2.Position("c"))
+	}
+}

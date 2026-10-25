@@ -66,7 +66,6 @@ func execute(f *rootFlags, r request) (any, error) {
 	if err := s.start(ctx, wa.ConnectOptions{}); err != nil {
 		return nil, err
 	}
-	s.oneShot = true
 	return r.run(ctx, s)
 }
 

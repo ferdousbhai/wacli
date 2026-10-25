@@ -113,3 +113,15 @@ func TestSkillInstallClearsCrashLeftovers(t *testing.T) {
 		t.Errorf("remove: %v", err)
 	}
 }
+
+func TestCrashDuringFirstInstallIsFinishedLater(t *testing.T) {
+	p, _ := testSkillPaths(t)
+	os.MkdirAll(p.dir, 0o755)
+	os.WriteFile(filepath.Join(p.dir, skillMarker), []byte("revision 0\n"), 0o644) // crashed right after claiming
+	if p.state() != skillOutdated {
+		t.Fatalf("state %s", p.state())
+	}
+	if _, err := p.install(false); err != nil || p.state() != skillCurrent {
+		t.Errorf("state %s err %v", p.state(), err)
+	}
+}

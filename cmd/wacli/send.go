@@ -83,25 +83,26 @@ func doSend(ctx context.Context, s *session, r request) (any, error) {
 		return nil, err
 	}
 	var msg *waE2E.Message
+	var data []byte
 	if r.File == "" {
 		msg = &waE2E.Message{Conversation: proto.String(r.Text)}
-	} else if msg, err = mediaMessage(ctx, s, r.File, r.Caption); err != nil {
+	} else if msg, data, err = mediaMessage(ctx, s, r.File, r.Caption); err != nil {
 		return nil, err
 	}
 	id, err := s.wa.SendProtoMessage(ctx, to, msg)
 	if err != nil {
 		return nil, err
 	}
-	if key := s.arc.RecordSent(ctx, to, id, msg); key != "" && s.oneShot {
-		s.arc.WaitMediaKeys(ctx, key)
-	}
+	s.arc.RecordSent(ctx, to, id, msg, data)
 	return map[string]any{"id": id, "chat": to.String()}, nil
 }
 
-func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E.Message, error) {
+// mediaMessage uploads the file and returns the message to send, and the
+// file's bytes for the archive.
+func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E.Message, []byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 	if mimeType == "" {
@@ -118,7 +119,7 @@ func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E
 	}
 	up, err := s.wa.Upload(ctx, data, kind)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	size := proto.Uint64(uint64(len(data)))
 	switch kind {
@@ -126,24 +127,24 @@ func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E
 		return &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
 			URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, Mimetype: &mimeType,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: size, Caption: optional(caption),
-		}}, nil
+		}}, data, nil
 	case whatsmeow.MediaVideo:
 		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
 			URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, Mimetype: &mimeType,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: size, Caption: optional(caption),
-		}}, nil
+		}}, data, nil
 	case whatsmeow.MediaAudio:
 		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
 			URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, Mimetype: &mimeType,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: size,
-		}}, nil
+		}}, data, nil
 	}
 	name := filepath.Base(path)
 	return &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
 		URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, Mimetype: &mimeType,
 		FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: size,
 		FileName: &name, Title: &name, Caption: optional(caption),
-	}}, nil
+	}}, data, nil
 }
 
 func optional(s string) *string {

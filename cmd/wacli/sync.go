@@ -21,6 +21,9 @@ func newAuthCmd(f *rootFlags) *cobra.Command {
 code with --phone), asks the phone for its full history, and archives it with
 all media. Linking again replaces the previous link.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if days < 0 {
+				return fmt.Errorf("--history-days must be 0 or more")
+			}
 			wa.SetHistorySyncLimits(wa.HistorySyncLimits{Full: true, Days: uint32(days)})
 			s, err := openSession(f)
 			if err != nil {

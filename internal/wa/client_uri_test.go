@@ -7,7 +7,7 @@ import (
 
 // TestNewRejectsURISpecialCharsInStorePath verifies that a StorePath
 // containing '?' or '#' is rejected before it can reach the SQLite URI
-// parser inside whatsmeow's sqlstore (#177, mirror of #59).
+// parser inside whatsmeow's sqlstore.
 func TestNewRejectsURISpecialCharsInStorePath(t *testing.T) {
 	cases := []struct{ name, path string }{
 		{"question mark", "/tmp/session.db?mode=memory"},

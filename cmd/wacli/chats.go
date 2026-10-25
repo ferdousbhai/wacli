@@ -134,7 +134,7 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
 		results = append(results, res)
 		if err != nil {
-			if r.All {
+			if r.All && ctx.Err() == nil {
 				logf("%s: %v", res.Folder, err)
 				continue
 			}

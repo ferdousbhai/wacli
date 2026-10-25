@@ -21,9 +21,6 @@ type session struct {
 	wa   *wa.Client
 	ar   *archive.Archive
 	arc  *archiver.Archiver
-	// oneShot: this process exits after one request, so a sent file is
-	// fetched back before it does (a running sync just keeps going).
-	oneShot bool
 }
 
 var errBusy = errors.New("another wacli is running")

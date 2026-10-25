@@ -91,8 +91,8 @@ func (p skillPaths) install(force bool) ([]string, error) {
 	return done, nil
 }
 
-// writeFiles writes the skill and its marker (the marker last, so a crash
-// in between reads as outdated and is fixed by the next run).
+// writeFiles writes the skill and then its marker's revision, so a crash at
+// any point reads as outdated and the next run finishes the job.
 func (p skillPaths) writeFiles() error {
 	if err := os.MkdirAll(p.dir, 0o755); err != nil {
 		return err
@@ -103,6 +103,14 @@ func (p skillPaths) writeFiles() error {
 			_, err := w.Write(data)
 			return err
 		})
+	}
+	// On a first install, claim the folder before anything else: a crash
+	// then leaves an "outdated" skill the next run finishes, not one that
+	// looks hand-written and needs --force.
+	if _, err := os.Stat(filepath.Join(p.dir, skillMarker)); errors.Is(err, os.ErrNotExist) {
+		if err := write(skillMarker, []byte("revision 0\n")); err != nil {
+			return err
+		}
 	}
 	if err := write("SKILL.md", skills.Wacli); err != nil {
 		return err

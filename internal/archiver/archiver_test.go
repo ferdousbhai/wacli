@@ -484,3 +484,21 @@ func TestCorruptQueueFileDoesNotStopSync(t *testing.T) {
 		t.Error("damaged queue not kept aside")
 	}
 }
+
+func TestSentFileGoesStraightIntoTheFolder(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	msg := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32)}}
+	a.RecordSent(context.Background(), mustJID(dana), "S1", msg, []byte("jpeg bytes"))
+	if a.PendingMedia() != 0 {
+		t.Errorf("sent file queued for download")
+	}
+	got := chatFile(t, ar, dana)
+	if !strings.Contains(got, "<attached: ") {
+		t.Fatalf("entry %q", got)
+	}
+	c, _ := ar.Chat(dana)
+	e, _ := c.Get("S1")
+	if b, err := os.ReadFile(filepath.Join(c.Dir(), e.Attachment)); err != nil || string(b) != "jpeg bytes" {
+		t.Errorf("file %q %v", b, err)
+	}
+}

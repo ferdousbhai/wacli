@@ -373,6 +373,42 @@ func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
 	q.forget(p.Chat, p.ID)
 }
 
+// placeOwn puts a file this device sent into its chat folder, in place of
+// the download its entry queued, and writes the entry.
+func (q *mediaQueue) placeOwn(chat, id string, data []byte) error {
+	q.mu.Lock()
+	p, ok := q.items[chat+"|"+id]
+	q.mu.Unlock()
+	if !ok {
+		return nil // not a downloadable attachment
+	}
+	c, err := q.a.ar.Chat(chat)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(q.a.ar.TmpDir(), "sent-*")
+	if err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Close()
+	} else {
+		tmp.Close()
+	}
+	if err == nil {
+		_, err = c.PlaceAttachment(id, tmp.Name(), p.Name)
+	}
+	if err == nil {
+		err = c.Flush()
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	q.forget(chat, id)
+	return nil
+}
+
 // queued reports whether a download for this message is queued or running.
 func (q *mediaQueue) queued(chat, id string) bool {
 	q.mu.Lock()

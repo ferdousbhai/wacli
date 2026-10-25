@@ -1035,6 +1035,13 @@ func (c *Chat) flushLocked() error {
 	if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
 		return err
 	}
+	// Index first, as appends do: a crash in between leaves a row with no
+	// entry, which realign drops and WhatsApp's redelivery fills in. The
+	// other order would leave an entry without its ID, and the redelivered
+	// message would be added twice.
+	if err := c.writeIndex(); err != nil {
+		return err
+	}
 	err := c.a.writeFile(c.chatPath(), func(w *bufio.Writer) error {
 		for _, e := range c.entries {
 			w.WriteString(e)
@@ -1043,9 +1050,6 @@ func (c *Chat) flushLocked() error {
 		return nil
 	})
 	if err != nil {
-		return err
-	}
-	if err := c.writeIndex(); err != nil {
 		return err
 	}
 	c.dirty = false

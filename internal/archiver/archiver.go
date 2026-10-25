@@ -137,16 +137,6 @@ func (a *Archiver) touch() { a.lastActivity.Store(time.Now().UnixNano()) }
 // PendingMedia is the number of attachments still to download.
 func (a *Archiver) PendingMedia() int { return a.media.len() }
 
-// WaitMediaKeys blocks until the given downloads are done (or have failed
-// and are backing off), or ctx ends.
-func (a *Archiver) WaitMediaKeys(ctx context.Context, keys ...string) {
-	set := map[string]bool{}
-	for _, k := range keys {
-		set[k] = true
-	}
-	a.media.wait(ctx, set)
-}
-
 // WaitMedia blocks until everything downloadable now is downloaded, or ctx
 // ends (auth and sync wait for the whole queue).
 func (a *Archiver) WaitMedia(ctx context.Context) { a.media.wait(ctx, a.media.keys()) }
@@ -545,9 +535,10 @@ func skipChat(jid types.JID) bool {
 }
 
 // RecordSent archives a message this device just sent; WhatsApp does not
-// echo it back as an event. It returns the key of the download it queued
-// for an attachment (the file, fetched back), or "".
-func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.MessageID, msg *waE2E.Message) string {
+// echo it back as an event. data is the attachment as uploaded (nil for
+// text): it is the file, so it goes straight into the chat folder instead of
+// being downloaded back.
+func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.MessageID, msg *waE2E.Message, data []byte) {
 	own, _ := types.ParseJID(a.wa.LinkedJID())
 	evt := &events.Message{
 		Info: types.MessageInfo{
@@ -558,9 +549,9 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		Message: msg,
 	}
 	a.archiveMessage(ctx, nil, wa.ParseLiveMessage(evt), "")
-	chat := a.canonical(ctx, to).String()
-	if a.media.queued(chat, string(id)) {
-		return chat + "|" + string(id)
+	if data != nil {
+		if err := a.media.placeOwn(a.canonical(ctx, to).String(), string(id), data); err != nil {
+			a.logf("warning: archiving the sent file (it will be downloaded instead): %v", err)
+		}
 	}
-	return ""
 }

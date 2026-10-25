@@ -33,7 +33,7 @@ func New(opts Options) (*Client, error) {
 	if strings.TrimSpace(opts.StorePath) == "" {
 		return nil, fmt.Errorf("StorePath is required")
 	}
-	// Reject paths that could inject SQLite URI parameters (#177, mirror of #59).
+	// Reject paths that could inject SQLite URI parameters.
 	if strings.ContainsAny(opts.StorePath, "?#") {
 		return nil, fmt.Errorf("StorePath must not contain '?' or '#'")
 	}
