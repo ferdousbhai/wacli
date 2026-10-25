@@ -80,6 +80,9 @@ func (s *session) waitLoggedIn(ctx context.Context) error {
 	defer t.Stop()
 	timeout := time.After(30 * time.Second)
 	for !s.wa.IsConnected() {
+		if !s.wa.IsAuthed() {
+			return errUnlinked // e.g. removed on the phone; whatsmeow forgot the session
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

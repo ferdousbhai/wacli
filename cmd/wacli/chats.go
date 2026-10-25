@@ -117,9 +117,6 @@ be online.`,
 }
 
 func doBackfill(ctx context.Context, s *session, r request) (any, error) {
-	if err := s.waitLoggedIn(ctx); err != nil { // also in a sync that is reconnecting
-		return nil, err
-	}
 	var jids []string
 	if r.All {
 		for _, c := range s.ar.Chats() {
@@ -137,6 +134,9 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 	var results []archiver.BackfillResult
 	unanswered, answered := 0, false
 	for _, jid := range jids {
+		if err := s.waitLoggedIn(ctx); err != nil { // rides out a short reconnect
+			return results, err
+		}
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
 		results = append(results, res)
 		switch {
@@ -281,7 +281,10 @@ func newLogoutCmd(f *rootFlags) *cobra.Command {
 			if err := s.wa.Connect(ctx, wa.ConnectOptions{}); err != nil {
 				return err
 			}
-			if err := s.waitLoggedIn(ctx); err != nil {
+			if err := s.waitLoggedIn(ctx); errors.Is(err, errUnlinked) {
+				fmt.Fprintln(os.Stderr, "Already unlinked. Chat folders in", s.ar.Root(), "are untouched.")
+				return nil
+			} else if err != nil {
 				return err
 			}
 			if err := s.wa.Logout(ctx); err != nil {

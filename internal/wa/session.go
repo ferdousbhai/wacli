@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/ferdousbhai/wacli/internal/sqliteutil"
 	_ "github.com/mattn/go-sqlite3"
@@ -57,10 +58,14 @@ func (c *Client) init() (err error) {
 	c.client.UseRetryMessageStore = true
 	cli := c.client
 	guardAppStateKeys(deviceStore)
+	var presence sync.Once
 	cli.AddEventHandler(func(evt any) {
-		if _, ok := evt.(*events.PairSuccess); ok {
+		switch evt.(type) {
+		case *events.PairSuccess:
 			// Pairing's Device.Save replaced the stores.
 			guardAppStateKeys(cli.Store)
+		case *events.Connected:
+			presence.Do(func() { go sendInitialAvailablePresence(context.Background(), cli) })
 		}
 	})
 	// Let whatsmeow own bounded primary-device retries and cancellation for
