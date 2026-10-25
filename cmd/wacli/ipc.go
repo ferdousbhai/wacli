@@ -91,11 +91,17 @@ func forward(ctx context.Context, f *rootFlags, r request) (any, error) {
 		return nil, fmt.Errorf("%w and is not accepting requests (only `wacli sync --follow` does): %v", errBusy, err)
 	}
 	defer conn.Close()
+	// Ctrl+C closes the connection, which tells the sync to stop the work.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	if err := json.NewEncoder(conn).Encode(r); err != nil {
 		return nil, err
 	}
 	var resp response
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	if resp.Error != "" {

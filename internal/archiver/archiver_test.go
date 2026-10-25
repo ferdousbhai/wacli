@@ -512,3 +512,14 @@ func TestReservedDownloadIsNotHandedOut(t *testing.T) {
 		t.Errorf("worker would download our own upload: %v", got)
 	}
 }
+
+func TestEventsDuringShutdownAreStillArchivedProperly(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // SIGTERM arrived; the connection isn't closed yet
+	a.ctx = ctx
+	a.handle(live(dana, dana, "M1", false, t0, text("late")))
+	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Dana Putri: late\r\n" {
+		t.Errorf("got %q", got)
+	}
+}

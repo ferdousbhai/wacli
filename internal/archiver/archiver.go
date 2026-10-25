@@ -46,6 +46,7 @@ type Archiver struct {
 	mu          sync.Mutex
 	backfill    map[string]chan historyBatch // chat JID → backfill waiting for a page
 	seenPayload map[string]bool
+	namesWanted map[string]bool // chats flagged NeedsNames since a refresh began
 }
 
 type historyBatch struct {
@@ -67,6 +68,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		namesChanged: make(chan struct{}, 1),
 		backfill:     map[string]chan historyBatch{},
 		seenPayload:  map[string]bool{},
+		namesWanted:  map[string]bool{},
 	}
 	q, err := newMediaQueue(a)
 	if err != nil {
@@ -147,7 +149,10 @@ func (a *Archiver) handle(evt any) {
 	if a.closed {
 		return
 	}
-	ctx := a.ctx
+	// Shutdown cancels a.ctx before the connection is closed; events still
+	// arriving (or the rest of a history chunk) must be archived properly,
+	// not with lookups failing on a cancelled context.
+	ctx := context.WithoutCancel(a.ctx)
 	switch v := evt.(type) {
 	case *events.Message:
 		a.names.notePush(v.Info.Sender.String(), v.Info.PushName)
@@ -379,6 +384,9 @@ func (a *Archiver) isFallbackSender(pm wa.ParsedMessage, sender string) bool {
 }
 
 func (a *Archiver) needsNames(jid string) {
+	a.mu.Lock()
+	a.namesWanted[jid] = true // tells a refresh pass in flight not to clear it
+	a.mu.Unlock()
 	if err := a.ar.UpdateInfo(jid, func(ci *archive.ChatInfo) { ci.NeedsNames = true }); err != nil {
 		a.logf("warning: %v", err)
 	}
@@ -539,6 +547,7 @@ func skipChat(jid types.JID) bool {
 // text): it is the file, so it goes straight into the chat folder instead of
 // being downloaded back.
 func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.MessageID, msg *waE2E.Message, data []byte) {
+	ctx = context.WithoutCancel(ctx) // it was sent: archive it even if the client left
 	own, _ := types.ParseJID(a.wa.LinkedJID())
 	evt := &events.Message{
 		Info: types.MessageInfo{

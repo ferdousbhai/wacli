@@ -48,7 +48,8 @@ func newChatsCmd(f *rootFlags) *cobra.Command {
 				}
 				c, err := ar.Chat(info.JID)
 				if err != nil {
-					return err
+					logf("skipping %s: %v", info.Folder, err) // one bad chat mustn't hide the rest
+					continue
 				}
 				r := chatRow{Name: info.Name, JID: info.JID, Kind: info.Kind, Path: c.Dir(), Messages: c.Len(), Complete: info.BackfillDone}
 				if all := c.Rows(); len(all) > 0 {

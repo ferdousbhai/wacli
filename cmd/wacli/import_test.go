@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/ferdousbhai/wacli/internal/archive"
+	"github.com/ferdousbhai/wacli/internal/delegate"
 )
 
 func TestExportChatName(t *testing.T) {
@@ -30,5 +33,30 @@ func TestNumberLikeGroupNameIsFound(t *testing.T) {
 	}
 	if jid, _ := resolveChat(ar, "+1 (415) 555-1212"); jid.String() != "14155551212@s.whatsapp.net" {
 		t.Errorf("number: %v", jid)
+	}
+}
+
+func TestForwardStopsOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	ln, err := delegate.Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			time.Sleep(5 * time.Second) // a long backfill
+			conn.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := forward(ctx, &rootFlags{storeDir: dir}, request{Op: "backfill"}); err == nil {
+		t.Fatal("expected cancellation")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("forward returned after %v", d)
 	}
 }
