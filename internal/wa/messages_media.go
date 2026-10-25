@@ -7,7 +7,11 @@ import (
 )
 
 func extractMedia(m *waProto.Message, pm *ParsedMessage) {
-	if img := m.GetImageMessage(); img != nil {
+	img := m.GetImageMessage()
+	if img == nil {
+		img = m.GetInstantImageMessage()
+	}
+	if img != nil {
 		if pm.Text == "" {
 			pm.Text = img.GetCaption()
 		}

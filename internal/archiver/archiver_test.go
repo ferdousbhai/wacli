@@ -901,3 +901,20 @@ func TestVideoNotesAreArchivedAndBlankOnesRepaired(t *testing.T) {
 		t.Errorf("blank video note not repaired: %q, pending %d", got, a.PendingMedia())
 	}
 }
+
+func TestContactCardsAttachAVCardAndRSVPsAreHidden(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	card := "BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nTEL;type=CELL:+44 20 0000 0000\nEND:VCARD"
+	a.handle(live(group, dana, "C1", false, t0, &waE2E.Message{ContactMessage: &waE2E.ContactMessage{DisplayName: proto.String("Ada Lovelace"), Vcard: proto.String(card)}}))
+	a.handle(live(group, dana, "R1", false, t0+5, &waE2E.Message{EncEventResponseMessage: &waE2E.EncEventResponseMessage{}}))
+	a.handle(live(group, dana, "S1", false, t0+6, &waE2E.Message{SpoilerMessage: &waE2E.FutureProofMessage{Message: text("hidden twist")}}))
+	got := chatFile(t, ar, group)
+	want := "‎[2025-10-24, 04:39:33] Dana Putri: ‎<attached: 00000000-Ada Lovelace.vcf>\r\n[2025-10-24, 04:39:39] Dana Putri: hidden twist\r\n"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	c, _ := ar.Chat(group)
+	if data, err := os.ReadFile(filepath.Join(c.Dir(), "00000000-Ada Lovelace.vcf")); err != nil || string(data) != card {
+		t.Errorf("vcf: %q %v", data, err)
+	}
+}

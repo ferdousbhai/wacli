@@ -369,14 +369,23 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	if fallback {
 		a.needsNames(c.JID()) // before the entry is on disk, so a crash can't lose the flag
 	}
+	var vcf string
 	_, inserted, err := c.Insert(row, func(pos int) archive.Entry {
-		if pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type) {
+		switch {
+		case pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type):
 			e.Omitted = archive.OmittedText(pm.Media.Type)
 			name := archive.AttachmentName(pos, pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename)
 			a.media.add(c, pm, name)
+		case pm.VCard != nil:
+			// Exports attach a shared contact as a .vcf; the card is in the message.
+			e.Omitted = contactOmitted
+			vcf = archive.AttachmentName(pos, "document", pm.Timestamp, contactFileName(pm.VCard.Name))
 		}
 		return e
 	})
+	if inserted && vcf != "" && err == nil {
+		err = a.placeVCard(c, pm.ID, vcf, pm.VCard.Data)
+	}
 	if inserted {
 		a.added.Add(1)
 		// Again after the insert: a refresh pass that read the chat before
@@ -505,6 +514,8 @@ func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender str
 		e.Text = strings.Join(lines, "\n‎")
 	case pm.IsAlbum:
 		e.Text = "" // iOS shows an album header as an empty message
+	case pm.VCard != nil:
+		e.Text = "" // the card is attached as a file
 	}
 	return e
 }
@@ -629,7 +640,8 @@ func invisiblePayload(payload string) bool {
 	}
 	for _, field := range strings.Split(payload, ",") {
 		switch field {
-		case "protocolMessage", "senderKeyDistributionMessage", "fastRatchetKeySenderKeyDistributionMessage", "keepInChatMessage", "encReactionMessage", "pinInChatMessage":
+		case "protocolMessage", "senderKeyDistributionMessage", "fastRatchetKeySenderKeyDistributionMessage", "keepInChatMessage", "encReactionMessage", "pinInChatMessage",
+			"encEventResponseMessage", "secretEncryptedMessage": // event RSVPs, encrypted edits
 		default:
 			return false
 		}
@@ -785,4 +797,32 @@ func (a *Archiver) isAdmin(ctx context.Context, chat types.JID, sender string) b
 		}
 	}
 	return false
+}
+
+const contactOmitted = "Contact card omitted"
+
+func contactFileName(name string) string {
+	if name = strings.TrimSpace(name); name == "" {
+		name = "Contact"
+	}
+	return name + ".vcf"
+}
+
+// placeVCard writes a shared contact's card next to the chat as its file.
+func (a *Archiver) placeVCard(c *archive.Chat, id, name, data string) error {
+	f, err := os.CreateTemp(a.ar.TmpDir(), "vcard-*")
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		_, err = c.PlaceAttachment(id, f.Name(), name)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }

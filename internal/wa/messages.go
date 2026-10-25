@@ -50,9 +50,10 @@ type ParsedMessage struct {
 	Media         *Media
 	Location      *Location
 	Poll          *Poll
-	IsPollVote    bool // a vote on a poll, not shown in exports
-	IsPollAdd     bool // an option added to a poll, not shown in exports
-	IsAlbum       bool // an album header: shown as an empty message
+	IsPollVote    bool   // a vote on a poll, not shown in exports
+	IsPollAdd     bool   // an option added to a poll, not shown in exports
+	IsAlbum       bool   // an album header: shown as an empty message
+	VCard         *VCard // a shared contact card
 	PushName      string
 	MentionedJIDs []string
 	ReactionToID  string
@@ -378,6 +379,12 @@ func extractAlbum(m *waProto.Message, pm *ParsedMessage) {
 	pm.IsAlbum = true // its photos and videos follow as messages of their own
 }
 
+// VCard is a shared contact: exports attach it as a .vcf file.
+type VCard struct {
+	Name string
+	Data string
+}
+
 // These envelopes retain the outer identity while carrying ordinary content.
 // whatsmeow unwraps some of them for live messages, but not in history
 // syncs or inside edits.
@@ -392,6 +399,9 @@ func contentWrapper(m *waProto.Message) *waProto.Message {
 		m.GetDocumentWithCaptionMessage(),
 		m.GetBotInvokeMessage(),
 		m.GetLottieStickerMessage(),
+		m.GetSpoilerMessage(),
+		m.GetBotForwardedMessage(),
+		m.GetAudioStickerMessage(),
 	} {
 		if inner := w.GetMessage(); inner != nil {
 			return inner

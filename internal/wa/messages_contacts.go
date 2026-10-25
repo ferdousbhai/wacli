@@ -11,6 +11,10 @@ import (
 func extractContactText(m *waProto.Message, pm *ParsedMessage) {
 	if contact := m.GetContactMessage(); contact != nil {
 		pm.Text = contactDisplayText(contact)
+		if v := contact.GetVcard(); strings.TrimSpace(v) != "" {
+			name, _ := contactDetails(contact)
+			pm.VCard = &VCard{Name: name, Data: v}
+		}
 		return
 	}
 	if contacts := m.GetContactsArrayMessage(); contacts != nil {
