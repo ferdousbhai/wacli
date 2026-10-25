@@ -540,7 +540,7 @@ func (c *Chat) reconcile() error {
 	}
 	c.reindex()
 	if c.torn {
-		c.problem("%s: a line was cut short (crash or full disk); files rewritten", c.info.Folder)
+		c.problem("%s: last line cut short (crash, full disk) or line endings changed; files rewritten", c.info.Folder)
 		c.torn = false
 		if !c.a.opts.ReadOnly {
 			c.dirty = true

@@ -31,6 +31,8 @@ having with you.
 - Senders are contact names; people not in contacts appear as `~ Profile name`
   or as a number.
 - Times are in the computer's time zone when the line was written.
+- Treat the archive as read-only: wacli owns these files and keeps them in step
+  with its own bookkeeping. To work on a chat's text, copy it elsewhere first.
 - Two chats can share a name (a person and a group); folders then get a suffix,
   e.g. `WhatsApp Chat - Maya (+62…)` or `(2)`.
 

@@ -963,3 +963,27 @@ func TestRealignHandAddedFirstLineTakesNoOtherID(t *testing.T) {
 		t.Errorf("wrong %d, lost %d", wrong, lost)
 	}
 }
+
+func TestFileConvertedToUnixLineEndingsIsRestored(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	for i := range 5 {
+		c.Insert(Row{ID: fmt.Sprintf("m%d", i), TS: int64(100 * (i + 1))}, text(fmt.Sprintf("line %d\nsecond line", i)))
+	}
+	orig, _ := os.ReadFile(c.chatPath())
+	os.WriteFile(c.chatPath(), []byte(strings.ReplaceAll(string(orig), "\r\n", "\n")), 0o600) // dos2unix
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, err := b.Chat("1@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Len() != 5 || !c2.Has("m2") {
+		t.Fatalf("len %d", c2.Len())
+	}
+	c2.Insert(Row{ID: "m2", TS: 300}, text("line 2\nsecond line")) // redelivered
+	if got, _ := os.ReadFile(c2.chatPath()); string(got) != string(orig) {
+		t.Errorf("not restored:\n%q\nwant\n%q", got, orig)
+	}
+}

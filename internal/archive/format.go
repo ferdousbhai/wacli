@@ -211,12 +211,19 @@ func renameSystemSender(raw, oldSender, newSender string) (string, bool) {
 // not start with an entry header continues the previous entry: a message text
 // that itself contained "\r\n" (files written before Render normalized it).
 func SplitEntries(content string) []string {
-	content = strings.TrimSuffix(content, EntrySep)
+	sep := EntrySep
+	if !strings.Contains(content, EntrySep) {
+		// Converted to Unix line ends (a script, an editor, git): entries
+		// are then told apart by their headers alone; load rewrites the
+		// file with "\r\n" again.
+		sep = "\n"
+	}
+	content = strings.TrimSuffix(content, sep)
 	if content == "" {
 		return nil
 	}
 	var out []string
-	for _, piece := range strings.Split(content, EntrySep) {
+	for _, piece := range strings.Split(content, sep) {
 		if len(out) > 0 && !headerRE.MatchString(piece) {
 			out[len(out)-1] += "\n" + piece
 			continue
