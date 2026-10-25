@@ -40,15 +40,15 @@ func WriteAtomic(path, tmpDir string, mode os.FileMode, fill func(w *bufio.Write
 		os.Remove(tmp.Name())
 		return err
 	}
-	syncDir(filepath.Dir(path)) // the rename itself, through a power loss
+	Sync(filepath.Dir(path)) // the rename itself, through a power loss
 	return nil
 }
 
-// syncDir flushes a directory's entries. Best effort: not every system can
-// (Windows can't open a directory for it).
-func syncDir(dir string) {
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		d.Close()
+// Sync flushes a file, or a directory's entries (after a rename or a new
+// file in it), to disk. Best effort: not every system can sync a directory.
+func Sync(path string) {
+	if f, err := os.Open(path); err == nil {
+		_ = f.Sync()
+		f.Close()
 	}
 }

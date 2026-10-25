@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -155,11 +156,13 @@ func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 		body = strings.TrimSuffix(body[:i], " ")
 		if !isGeneratedMediaName(e.Attachment) {
 			// Documents: "<name> • ‎<n> pages" (or just "<name>") before the file.
+			// The file's name may be shortened; the label starts with it.
 			label := filepath.Base(e.Attachment)
 			if _, name, ok := strings.Cut(label, "-"); ok {
 				label = name
 			}
-			if j := strings.LastIndex(body, label); j >= 0 {
+			label = strings.TrimSuffix(label, filepath.Ext(label))
+			if j := strings.LastIndex(body, label); j >= 0 && label != "" {
 				e.DocLabel = body[j:]
 				body = strings.TrimSuffix(body[:j], " ")
 			}
@@ -341,6 +344,21 @@ func IsBidiMark(r rune) bool {
 
 // truncateName shortens the stem to max runes, keeping the extension, as iOS
 // does ("Restructuring Invoice - PT. Acme Holding.pdf").
+// maxFolderBytes is the longest name most file systems allow.
+const maxFolderBytes = 255
+
+// truncateBytes cuts s to at most max bytes, at a character boundary.
+func truncateBytes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	s = s[:max]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return strings.TrimSpace(s)
+}
+
 func truncateName(name string, max int) string {
 	ext := filepath.Ext(name)
 	stem := []rune(strings.TrimSuffix(name, ext))

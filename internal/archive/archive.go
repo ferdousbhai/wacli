@@ -119,7 +119,21 @@ func Open(opts Options) (*Archive, error) {
 	for jid, info := range a.meta {
 		info.JID = jid
 	}
+	a.shortenFolders()
 	return a, a.finishRenames()
+}
+
+// shortenFolders gives a new folder to a chat whose name was too long for
+// one (from versions that didn't shorten names); the folder never existed.
+func (a *Archive) shortenFolders() {
+	for jid, info := range a.meta {
+		if len(info.Folder) > maxFolderBytes && info.PrevFolder == "" {
+			info.Folder = a.freeFolderLocked(info.Name, "", jid, "")
+			if !a.opts.ReadOnly {
+				_ = a.saveMetaLocked() // else in memory; tried again next Open
+			}
+		}
+	}
 }
 
 // finishRenames completes folder renames a crash interrupted.
@@ -137,6 +151,7 @@ func (a *Archive) finishRenames() error {
 			if err := os.Rename(a.path(info.PrevFolder), a.path(info.Folder)); err != nil {
 				return err
 			}
+			fsutil.Sync(a.opts.Root)
 		}
 		info.PrevFolder = ""
 		changed = true
@@ -303,7 +318,8 @@ func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error
 // freeFolderLocked picks a folder name for name that no other chat or file
 // uses; own is the chat's current folder, which doesn't count as taken.
 func (a *Archive) freeFolderLocked(name, suffix, jid, own string) string {
-	base := folderStart + strings.TrimSpace(sanitizeFileName(name))
+	// Short enough for a file system's 255-byte names, with a suffix.
+	base := folderStart + strings.TrimSpace(truncateBytes(sanitizeFileName(name), 180))
 	if strings.TrimSpace(name) == "" {
 		base = folderStart + strings.SplitN(jid, "@", 2)[0]
 	}
@@ -360,6 +376,9 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 			return "", err
 		}
 		err := os.Rename(a.path(oldFolder), a.path(folder))
+		if err == nil {
+			fsutil.Sync(a.opts.Root) // before anything records the new name as done
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			err = os.MkdirAll(a.path(folder), 0o700)
 		}
@@ -951,6 +970,7 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 		}
 	} else {
 		name = freeName(dir, name)
+		fsutil.Sync(src) // its data on disk before the entry says "attached"
 		if err := os.Rename(src, filepath.Join(dir, name)); err != nil {
 			return "", err
 		}
@@ -1078,6 +1098,8 @@ func (c *Chat) moveDeletedLocked() {
 	if len(left) == len(c.info.DeletedMedia) {
 		return
 	}
+	fsutil.Sync(dst)
+	fsutil.Sync(c.dirLocked())
 	c.a.mu.Lock()
 	c.info.DeletedMedia = left
 	_ = c.a.saveMetaLocked() // if this fails, the next pass finds the files gone
@@ -1246,6 +1268,9 @@ func exists(path string) bool {
 }
 
 func appendFile(path, s string) error {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		defer fsutil.Sync(filepath.Dir(path)) // a new file: its directory entry too
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err

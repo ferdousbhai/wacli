@@ -294,12 +294,15 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.applyDelete(ctx, b, c, pm, row)
 		return
 	case pm.Edited && c.Has(pm.ID):
-		text := a.names.mentions(ctx, pm.Text, pm.MentionedJIDs)
+		edit := a.entryFor(ctx, pm, "") // a document's caption and label, as when sent
 		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
-			if e.Deleted != "" || (e.Text == text && e.Edited) {
+			if edit.DocLabel == "" {
+				edit.DocLabel = e.DocLabel
+			}
+			if e.Deleted != "" || (e.Text == edit.Text && e.DocLabel == edit.DocLabel && e.Edited) {
 				return false
 			}
-			e.Text, e.Edited = text, true
+			e.Text, e.DocLabel, e.Edited = edit.Text, edit.DocLabel, true
 			return true
 		})
 		a.wrote(b, c, err)
