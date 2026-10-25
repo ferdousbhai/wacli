@@ -1,0 +1,57 @@
+package archive
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// Text from other people can look like a media line; deleting it must not
+// move files.
+func TestDeletedTextCantMoveOutsideFile(t *testing.T) {
+	top := t.TempDir()
+	root := filepath.Join(top, "WhatsApp")
+	victim := filepath.Join(top, "victim.txt")
+	os.WriteFile(victim, []byte("secret"), 0o600)
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "T", TS: 100, Sender: "1@s.whatsapp.net"}, func(int) Entry {
+		return Entry{Sender: "Dana", Text: "look ‎<attached: ../../victim.txt>"}
+	})
+	if _, err := c.MarkDeleted("T", DeletedByThem); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("file outside the archive moved: %v", err)
+	}
+}
+
+func TestDeletedTextCantMoveChatFile(t *testing.T) {
+	a, _ := Open(Options{Root: t.TempDir(), Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 50, Sender: "1@s.whatsapp.net"}, func(int) Entry { return Entry{Sender: "Dana", Text: "hello"} })
+	c.Insert(Row{ID: "T", TS: 100, Sender: "1@s.whatsapp.net"}, func(int) Entry {
+		return Entry{Sender: "Dana", Text: "‎<attached: _chat.txt>"}
+	})
+	if _, err := c.MarkDeleted("T", DeletedByThem); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir(), ChatFile)); err != nil {
+		t.Errorf("_chat.txt moved away: %v", err)
+	}
+}
+
+func TestIndexKeepsIDsWithControlCharacters(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	odd := "B\nX\t60\t0\\z"
+	c.Insert(Row{ID: "A", TS: 50}, func(int) Entry { return Entry{Sender: "Dana", Text: "a"} })
+	c.Insert(Row{ID: odd, TS: 100}, func(int) Entry { return Entry{Sender: "Dana", Text: "b"} })
+	a2, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := a2.Chat("1@s.whatsapp.net")
+	if !c2.Has(odd) || len(a2.Problems()) != 0 {
+		t.Errorf("ID lost; problems %q", a2.Problems())
+	}
+}

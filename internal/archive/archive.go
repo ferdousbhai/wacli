@@ -1094,7 +1094,9 @@ func (c *Chat) MarkDeleted(id, text string) (bool, error) {
 		if e.Deleted != "" {
 			return false
 		}
-		file = e.Attachment
+		if ownFile(e.Attachment) {
+			file = e.Attachment
+		}
 		e.MakeDeleted(text)
 		return true
 	})
@@ -1128,6 +1130,9 @@ func (c *Chat) moveDeletedLocked() {
 	dst := c.deletedDirLocked()
 	var left []string
 	for _, f := range c.info.DeletedMedia {
+		if !ownFile(f) {
+			continue // never a path out of the chat folder, nor its _chat.txt
+		}
 		if c.referencedLocked(f) {
 			left = append(left, f) // the "deleted" entry isn't written yet
 			continue
@@ -1273,12 +1278,25 @@ func (a *Archive) FlushAll() error {
 	return first
 }
 
+// ownFile reports whether name is a file of the chat folder that a message
+// may own: a plain name, not _chat.txt.
+func ownFile(name string) bool {
+	return name != "" && name != "." && name != ".." && name != ChatFile && filepath.Base(name) == name
+}
+
+// IDs and JIDs come from other people's clients; these keep a row on one
+// line whatever they hold.
+var (
+	escapeField   = strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\n", "\\n", "\r", "\\r")
+	unescapeField = strings.NewReplacer("\\\\", "\\", "\\t", "\t", "\\n", "\n", "\\r", "\r")
+)
+
 func formatRow(r Row) string {
 	from := "0"
 	if r.FromMe {
 		from = "1"
 	}
-	return strings.Join([]string{r.ID, strconv.FormatInt(r.TS, 10), from, r.Sender}, "\t") + "\n"
+	return strings.Join([]string{escapeField.Replace(r.ID), strconv.FormatInt(r.TS, 10), from, escapeField.Replace(r.Sender)}, "\t") + "\n"
 }
 
 func readIndex(path string) ([]Row, error) {
@@ -1305,7 +1323,7 @@ func readIndex(path string) ([]Row, error) {
 		if err != nil {
 			continue
 		}
-		rows = append(rows, Row{ID: parts[0], TS: ts, FromMe: parts[2] == "1", Sender: parts[3]})
+		rows = append(rows, Row{ID: unescapeField.Replace(parts[0]), TS: ts, FromMe: parts[2] == "1", Sender: unescapeField.Replace(parts[3])})
 	}
 	return rows, sc.Err()
 }

@@ -155,13 +155,19 @@ func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 		e.Deleted = DeletedByMe
 		return e, nil
 	}
-	if i := strings.LastIndex(body, attachOpen); i >= 0 && strings.HasSuffix(body, ">") {
+	// Only media lines start with U+200E before "["; a text can't, so a
+	// sender typing "‎<attached: ../x>" can't make one.
+	media := strings.HasPrefix(raw, lrm)
+	if i := strings.LastIndex(body, attachOpen); media && i >= 0 && strings.HasSuffix(body, ">") {
 		e.Attachment = body[i+len(attachOpen) : len(body)-1]
 		body = strings.TrimSuffix(body[:i], " ")
 		e.Text, e.DocLabel = SplitDocLabel(body, e.Attachment)
 		return e, nil
 	}
 	for _, kind := range omittedKinds {
+		if !media {
+			break
+		}
 		if rest, ok := strings.CutSuffix(body, lrm+kind); ok {
 			e.Omitted = kind
 			e.Text = strings.TrimSuffix(rest, " ")
