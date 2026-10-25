@@ -523,3 +523,24 @@ func TestEventsDuringShutdownAreStillArchivedProperly(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestRenameDuringHoldIsOnDiskBeforeFlagClears(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	c, _, _ := ar.EnsureChat(dana, "Dana Putri", "dm", "")
+	c.Insert(archive.Row{ID: "M1", TS: t0, Sender: dana}, func(int) archive.Entry {
+		return archive.Entry{Sender: "+6281111111111", Text: "U too"}
+	})
+	a.needsNames(dana)
+	c.Hold() // a history chunk in progress
+	a.RefreshNames(context.Background(), false)
+	ar2, err := archive.Open(archive.Options{Root: ar.Root(), Location: time.UTC}) // as after a crash
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := ar2.Info(dana)
+	c2, _ := ar2.Chat(dana)
+	data, _ := os.ReadFile(filepath.Join(c2.Dir(), archive.ChatFile))
+	if !info.NeedsNames && strings.Contains(string(data), "+6281111111111") {
+		t.Errorf("flag cleared but the file still has the number: %q", data)
+	}
+}

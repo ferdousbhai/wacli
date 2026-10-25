@@ -78,6 +78,8 @@ func (s *session) close() {
 func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	start := time.Now() // linking can take minutes before the first message
+	quiet := func() bool { return min(s.arc.Idle(), time.Since(start)) >= idle }
 	var last int64
 	for i := 0; ; i++ {
 		select {
@@ -89,9 +91,9 @@ func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
 			fmt.Fprintf(os.Stderr, "\rarchived %d messages, %d attachments pending   ", n, s.arc.PendingMedia())
 			last = n
 		}
-		if s.arc.Idle() >= idle {
+		if quiet() {
 			s.arc.WaitMedia(ctx)
-			if s.arc.Idle() >= idle {
+			if quiet() {
 				fmt.Fprintln(os.Stderr)
 				return
 			}

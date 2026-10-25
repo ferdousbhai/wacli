@@ -137,9 +137,12 @@ func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved 
 		}
 		return name, true
 	})
+	if err == nil && n > 0 {
+		err = c.Flush() // now: a batch holding the chat writes only on release
+	}
 	if err != nil {
 		a.logf("warning: %v", err)
-		return max(left, 1) // the rename didn't happen; keep the chat flagged
+		return max(left, 1) // the rename isn't on disk; keep the chat flagged
 	} else if n > 0 {
 		a.logf("named %d senders in %s", n, filepath.Base(c.Dir()))
 	}

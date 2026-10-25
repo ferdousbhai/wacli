@@ -138,8 +138,8 @@ func (n *names) group(ctx context.Context, jid types.JID) string {
 		return name
 	}
 	// Groups you left can't be looked up; don't ask again every pass.
-	if ok && time.Since(failed) < 30*time.Minute {
-		return ""
+	if ok && time.Since(failed) < 30*time.Minute || !n.wa.IsConnected() {
+		return "" // offline isn't a failure: ask again once connected
 	}
 	info, err := n.wa.GetGroupInfo(ctx, jid)
 	if err != nil || info == nil {

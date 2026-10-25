@@ -1044,3 +1044,37 @@ func TestTrailingNewlineOfLastMessageIsKept(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestTornHeaderFragmentIsDropped(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	c.Insert(Row{ID: "B", TS: 200}, text("hello"))
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:0")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if e, _ := c2.Get("B"); e.Text != "hello" {
+		t.Errorf("B corrupted: %q", e.Text)
+	}
+	c2.Insert(Row{ID: "C", TS: 300}, text("bye")) // redelivery
+	if got := chatText(t, c2); !strings.HasSuffix(got, "Dana: hello\r\n[1970-01-01, 00:05:00] Dana: bye\r\n") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestTornLastLineLetsRedeliveryLand(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: hel")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("hello")) // redelivery
+	if got := chatText(t, c2); !strings.Contains(got, "Dana: hel\r\n") || !strings.Contains(got, "Dana: hello\r\n") {
+		t.Errorf("got %q", got) // the cut line is kept; the whole message lands too
+	}
+}

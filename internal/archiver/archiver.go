@@ -173,6 +173,15 @@ func (a *Archiver) handle(evt any) {
 		a.nameChanged()
 	case *events.Disconnected, *events.LoggedOut:
 		a.trackConnection(v)
+	// whatsmeow doesn't reconnect after these.
+	case *events.StreamReplaced:
+		a.halt("another client connected with this session", false)
+	case *events.ClientOutdated:
+		a.halt("WhatsApp rejected this wacli version as outdated; update wacli", false)
+	case *events.TemporaryBan:
+		a.halt("WhatsApp temporarily banned this account: "+v.String(), false)
+	case *events.ConnectFailure:
+		a.halt(fmt.Sprintf("WhatsApp refused the connection (%d %s)", int(v.Reason), v.Message), true)
 	}
 }
 
@@ -241,7 +250,7 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 	if data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
 		// A waiting backfill reads the chat, so tell it only once written.
 		for chatID, page := range pages {
-			a.deliverBackfill(chatID, page)
+			a.deliverBackfill(ctx, chatID, page)
 		}
 	}
 	if n := a.added.Load() - before; n > 0 {

@@ -32,7 +32,10 @@ Archives everything WhatsApp delivers: new messages, the backlog queued while
 wacli was offline, edits, deletes, group changes, and downloads media. Without
 `--follow` it stops once idle. With `--follow` it runs until stopped (normally
 as the `wacli-sync` systemd user service; see the README). If WhatsApp unlinks
-this computer, it exits with status 3 so the service stops restarting.
+this computer, it exits with status 3 so the service stops restarting. If
+WhatsApp ends the connection for good another way (another client took over
+the session, a temporary ban, an outdated wacli), it exits with status 4 and
+`wacli doctor` shows why.
 
 ## backfill
 
@@ -44,8 +47,9 @@ Asks the phone for older history, page by page, starting from the newest
 message and following the phone's own order, so gaps in the middle of a chat
 are filled too. Progress is saved per chat, so a later run continues where
 this one stopped (`--requests` caps the pages per run); a chat is marked
-complete when the phone has nothing more. The phone must be online. Phones don't hand linked
-devices everything; for the rest, use `import`.
+complete when the phone has nothing more. The phone must be online: `--all`
+gives up (exit status 1) after three chats in a row get no answer. Phones don't
+hand linked devices everything; for the rest, use `import`.
 
 ## import
 
@@ -57,7 +61,9 @@ Merges an iPhone export (zip or folder) into the archived chat. Entries already
 there are matched by sender, time (within 2 seconds) and content; missing ones
 are added; attachments fill in entries that say `… omitted`. Importing the same
 export again changes nothing. The chat is found from the export's name; pass
-`--chat` when two chats share it. `--date-format` must match the export.
+`--chat` when two chats share it. `--date-format` must match the export (while
+`sync --follow` runs, the import is done by it, with its `--date-format` and
+`--archive`).
 
 ## chats
 
@@ -96,7 +102,8 @@ nothing.
 
 ## logout
 
-Unlinks this computer. The chat folders are kept.
+Unlinks this computer. The chat folders are kept. Stop the sync first
+(`systemctl --user stop wacli-sync`).
 
 ## skill
 

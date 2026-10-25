@@ -7,8 +7,9 @@ After=network-online.target
 ExecStart=%h/.local/bin/wacli sync --follow
 Restart=on-failure
 RestartSec=30
-# Exit 3: unlinked from WhatsApp; restarting would not help. Run `wacli auth`.
-RestartPreventExitStatus=3
+# Restarting would not help: 3 is unlinked (run `wacli auth`); 4 is another
+# client taking over, a ban or an outdated wacli (`wacli doctor` says which).
+RestartPreventExitStatus=3 4
 
 [Install]
 WantedBy=default.target

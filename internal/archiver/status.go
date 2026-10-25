@@ -25,6 +25,8 @@ type Status struct {
 	LastArchived  time.Time `json:"last_archived,omitzero"`
 	LoggedOut     bool      `json:"logged_out,omitempty"`
 	LoggedOutAt   time.Time `json:"logged_out_at,omitzero"`
+	Halted        string    `json:"halted,omitempty"` // why the sync stopped, other than unlinking
+	HaltedAt      time.Time `json:"halted_at,omitzero"`
 	NewMessages   int64     `json:"new_messages"`
 	PendingMedia  int       `json:"pending_media"`
 	Problems      []string  `json:"problems,omitempty"`
@@ -49,11 +51,19 @@ type statusTracker struct {
 	s         Status
 	loggedOut chan struct{}
 	once      sync.Once
+	halted    chan Halt
+}
+
+// Halt is a disconnect whatsmeow won't recover from; Retry says whether a
+// fresh start might.
+type Halt struct {
+	Reason string
+	Retry  bool
 }
 
 func newStatusTracker() *statusTracker {
 	now := time.Now()
-	return &statusTracker{s: Status{PID: os.Getpid(), StartedAt: now}, loggedOut: make(chan struct{})}
+	return &statusTracker{s: Status{PID: os.Getpid(), StartedAt: now}, loggedOut: make(chan struct{}), halted: make(chan Halt, 1)}
 }
 
 func (a *Archiver) trackConnection(evt any) {
@@ -71,6 +81,22 @@ func (a *Archiver) trackConnection(evt any) {
 	t.mu.Unlock()
 	a.writeStatus()
 }
+
+func (a *Archiver) halt(reason string, retry bool) {
+	t := a.status
+	t.mu.Lock()
+	t.s.Connected, t.s.Halted, t.s.HaltedAt = false, reason, time.Now()
+	t.mu.Unlock()
+	a.logf("stopping: %s", reason)
+	a.writeStatus()
+	select {
+	case t.halted <- Halt{reason, retry}:
+	default: // the first one counts
+	}
+}
+
+// Halted delivers the first disconnect wacli has to stop for.
+func (a *Archiver) Halted() <-chan Halt { return a.status.halted }
 
 // LoggedOut is closed when WhatsApp unlinks this computer.
 func (a *Archiver) LoggedOut() <-chan struct{} { return a.status.loggedOut }

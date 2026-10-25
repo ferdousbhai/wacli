@@ -137,15 +137,18 @@ func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor arch
 			a.logf("no history answer for %s via %s", c.Name(), target)
 		}
 	}
-	return historyBatch{}, fmt.Errorf("phone did not answer history request for %s (is it online?)", c.Name())
+	return historyBatch{}, fmt.Errorf("%s: %w", c.Name(), ErrNoAnswer)
 }
 
-func (a *Archiver) deliverBackfill(chatID string, batch historyBatch) {
+// ErrNoAnswer is a history request the phone didn't answer in time.
+var ErrNoAnswer = errors.New("phone did not answer the history request (is it online?)")
+
+func (a *Archiver) deliverBackfill(ctx context.Context, chatID string, batch historyBatch) {
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return
 	}
-	key := a.canonical(a.ctx, jid).String()
+	key := a.canonical(ctx, jid).String()
 	a.mu.Lock()
 	ch, running := a.backfill[key]
 	if running {

@@ -32,11 +32,20 @@ var errUnlinked = errors.New("this computer is not linked to WhatsApp (or was un
 
 const exitUnlinked = 3
 
+// errHalted exits with exitHalted: WhatsApp ended the connection in a way a
+// restart wouldn't fix (another client took over, a ban, an outdated client).
+var errHalted = errors.New("sync stopped")
+
+const exitHalted = 4
+
 func main() {
 	refreshSkill()
 	if err := newRoot().Execute(); err != nil {
 		if errors.Is(err, errUnlinked) {
 			os.Exit(exitUnlinked)
+		}
+		if errors.Is(err, errHalted) {
+			os.Exit(exitHalted)
 		}
 		os.Exit(1)
 	}

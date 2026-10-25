@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -88,6 +89,11 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 				return nil
 			case <-s.arc.LoggedOut():
 				return errUnlinked
+			case h := <-s.arc.Halted():
+				if h.Retry {
+					return errors.New(h.Reason)
+				}
+				return fmt.Errorf("%w: %s", errHalted, h.Reason)
 			}
 		},
 	}

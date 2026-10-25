@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,11 +132,18 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		jids = []string{jid.String()}
 	}
 	var results []archiver.BackfillResult
+	unanswered := 0
 	for _, jid := range jids {
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
 		results = append(results, res)
+		if errors.Is(err, archiver.ErrNoAnswer) {
+			unanswered++
+		} else {
+			unanswered = 0
+		}
 		if err != nil {
-			if r.All && ctx.Err() == nil {
+			// Three silent chats in a row: the phone is offline, not the chat.
+			if r.All && ctx.Err() == nil && unanswered < 3 {
 				logf("%s: %v", res.Folder, err)
 				continue
 			}
@@ -182,6 +190,9 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				info["last_archived"] = st.LastArchived.Format(time.RFC3339)
 				info["status_updated"] = st.UpdatedAt.Format(time.RFC3339)
 				info["pending_media"] = st.PendingMedia
+				if st.Halted != "" && !running {
+					problems = append(problems, "sync stopped at "+st.HaltedAt.Format(time.RFC3339)+": "+st.Halted)
+				}
 				if st.LoggedOut {
 					problems = append(problems, "WhatsApp unlinked this computer at "+st.LoggedOutAt.Format(time.RFC3339)+"; run `wacli auth`")
 				}
