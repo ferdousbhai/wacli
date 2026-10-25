@@ -325,7 +325,7 @@ func (a *Archiver) requeueMedia(c *archive.Chat, pm wa.ParsedMessage) {
 	if e, ok := c.Get(pm.ID); !ok || e.Omitted == "" || e.Deleted != "" {
 		return
 	}
-	a.media.add(c, pm, archive.AttachmentName(c.Len(), pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename))
+	a.media.add(c, pm, archive.AttachmentName(c.Position(pm.ID), pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename))
 	a.media.flush()
 }
 
@@ -447,37 +447,21 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 	if pm.FromMe {
 		text = archive.DeletedByMe
 	}
-	if !c.Has(pm.ID) {
-		// The original never reached us; keep the tombstone at deletion time.
-		sender := a.senderName(ctx, pm)
-		_, inserted, err := c.Insert(row, func(int) archive.Entry {
-			return archive.Entry{Sender: sender, Deleted: text}
-		})
-		if inserted {
-			a.added.Add(1)
-		}
+	a.media.forget(c.JID(), pm.ID)
+	existed, err := c.MarkDeleted(pm.ID, text)
+	if existed || err != nil {
 		a.wrote(b, c, err)
 		return
 	}
-	var attachment string
-	_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
-		if e.Deleted != "" {
-			return false
-		}
-		attachment = e.Attachment
-		e.MakeDeleted(text)
-		return true
+	// The original never reached us; keep the tombstone at deletion time.
+	sender := a.senderName(ctx, pm)
+	_, inserted, err := c.Insert(row, func(int) archive.Entry {
+		return archive.Entry{Sender: sender, Deleted: text}
 	})
-	a.wrote(b, c, err)
-	a.media.forget(c.JID(), pm.ID)
-	if attachment != "" {
-		// Exports don't contain media of deleted messages; keep it aside.
-		dir := c.Dir()
-		dst := filepath.Join(a.ar.Root(), ".wacli", "deleted", filepath.Base(dir))
-		if err := os.MkdirAll(dst, 0o700); err == nil {
-			_ = os.Rename(filepath.Join(dir, attachment), filepath.Join(dst, attachment))
-		}
+	if inserted {
+		a.added.Add(1)
 	}
+	a.wrote(b, c, err)
 }
 
 // chat returns the archive chat for jid, creating its folder on first use.

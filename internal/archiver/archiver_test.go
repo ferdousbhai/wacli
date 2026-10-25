@@ -435,7 +435,7 @@ func TestFinishedDownloadLeavesQueueOnlyOnceWritten(t *testing.T) {
 	}
 	src := filepath.Join(t.TempDir(), "dl")
 	os.WriteFile(src, []byte("jpg"), 0o600)
-	if _, err := c.PlaceAttachment(p.ID, src, p.Name, nil); err != nil {
+	if _, err := c.PlaceAttachment(p.ID, src, p.Name); err != nil {
 		t.Fatal(err)
 	}
 	a.media.placed[p.Chat] = []string{p.key()}

@@ -301,8 +301,10 @@ func TestDownloadRetriedMediaAuthenticatesReupload(t *testing.T) {
 			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
 				t.Fatalf("retry = %v, want rejection %v", err, tc.want)
 			}
-			if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, plaintext) {
-				t.Fatalf("failed retry replaced output: %q, %v", got, err)
+			// The target is the caller's private download path: a failed
+			// retry removes it rather than leave unverified bytes there.
+			if got, err := os.ReadFile(target); err == nil && !bytes.Equal(got, plaintext) {
+				t.Fatalf("failed retry left unverified bytes: %q", got)
 			}
 			partials, err := filepath.Glob(filepath.Join(filepath.Dir(target), ".wacli-download-*"))
 			if err != nil || len(partials) != 0 {

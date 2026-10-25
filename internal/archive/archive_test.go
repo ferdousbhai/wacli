@@ -2,7 +2,6 @@ package archive
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -133,7 +132,7 @@ func TestMergeAddsMissingAndRestoresMedia(t *testing.T) {
 		{Time: time.Unix(200, 0).UTC(), Sender: "Dana", DocLabel: "Invoice.pdf • ‎4 pages", Attachment: "00000039-Invoice.pdf"},
 		{Time: time.Unix(301, 0).UTC(), Sender: "Alex", Text: "🙏", Attachment: "00000040-PHOTO-1970-01-01-00-05-01.jpg"},
 	}
-	res, err := c.Merge(context.Background(), in, src)
+	res, err := c.Merge(context.Background(), in, src, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +151,7 @@ func TestMergeAddsMissingAndRestoresMedia(t *testing.T) {
 		}
 	}
 	// Importing again changes nothing.
-	if res, _ := c.Merge(context.Background(), in, src); res.Added != 0 || res.MediaRestored != 0 {
+	if res, _ := c.Merge(context.Background(), in, src, false); res.Added != 0 || res.MediaRestored != 0 {
 		t.Errorf("second import %+v", res)
 	}
 }
@@ -191,10 +190,10 @@ func TestMergeKeepsPhotosSentASecondApart(t *testing.T) {
 	for _, e := range in {
 		os.WriteFile(filepath.Join(src, e.Attachment), []byte("x"), 0o600)
 	}
-	if res, err := c.Merge(context.Background(), in, src); err != nil || res.Added != 2 {
+	if res, err := c.Merge(context.Background(), in, src, false); err != nil || res.Added != 2 {
 		t.Fatalf("first import %+v %v", res, err)
 	}
-	if res, _ := c.Merge(context.Background(), in, src); res.Added != 0 || res.Matched != 2 {
+	if res, _ := c.Merge(context.Background(), in, src, false); res.Added != 0 || res.Matched != 2 {
 		t.Errorf("second import %+v", res)
 	}
 }
@@ -204,7 +203,7 @@ func TestMergeIgnoresMentionNames(t *testing.T) {
 	c, _, _ := a.EnsureChat("g@g.us", "Maya", "group", "")
 	c.Insert(Row{ID: "A", TS: 5}, func(int) Entry { return Entry{Sender: "Maya", Text: "Hi @⁨Alex⁩ soon"} })
 	in := []Entry{{Time: time.Unix(5, 0).UTC(), Sender: "Maya", Text: "Hi @⁨Saved Messages⁩ soon"}}
-	if res, _ := c.Merge(context.Background(), in, t.TempDir()); res.Matched != 1 || res.Added != 0 {
+	if res, _ := c.Merge(context.Background(), in, t.TempDir(), false); res.Matched != 1 || res.Added != 0 {
 		t.Errorf("%+v", res)
 	}
 }
@@ -385,10 +384,10 @@ func TestMergeKeepsIdenticalLines(t *testing.T) {
 	a := openTest(t)
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
 	ok := Entry{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "ok"}
-	if res, err := c.Merge(context.Background(), []Entry{ok, ok}, t.TempDir()); err != nil || res.Added != 2 {
+	if res, err := c.Merge(context.Background(), []Entry{ok, ok}, t.TempDir(), false); err != nil || res.Added != 2 {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if res, _ := c.Merge(context.Background(), []Entry{ok, ok}, t.TempDir()); res.Added != 0 || res.Matched != 2 {
+	if res, _ := c.Merge(context.Background(), []Entry{ok, ok}, t.TempDir(), false); res.Added != 0 || res.Matched != 2 {
 		t.Errorf("second import %+v", res)
 	}
 }
@@ -401,7 +400,7 @@ func TestMergeMissingFileLeavesItOmittedAndContinues(t *testing.T) {
 		{Time: time.Unix(6, 0).UTC(), Sender: "Dana", Text: "after"},
 	}
 	for range 2 { // and again: the second run must not get stuck either
-		if _, err := c.Merge(context.Background(), in, t.TempDir()); err != nil {
+		if _, err := c.Merge(context.Background(), in, t.TempDir(), false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -476,7 +475,7 @@ func TestPlaceAttachmentUsesFreeNameCurrentFolderAndDeletion(t *testing.T) {
 	put := func(id string) (string, error) {
 		src := filepath.Join(tmp, id)
 		os.WriteFile(src, []byte(id), 0o600)
-		return c.PlaceAttachment(id, src, "00000000-invoice.pdf", nil)
+		return c.PlaceAttachment(id, src, "00000000-invoice.pdf")
 	}
 	n1, _ := put("A")
 	n2, _ := put("B")
@@ -522,7 +521,7 @@ func TestFindSeesEntriesHeldByABatch(t *testing.T) {
 	if !c.Find(Entry{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "hello"}) {
 		t.Error("held entry not found")
 	}
-	res, _ := c.Merge(context.Background(), []Entry{{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "hello"}}, t.TempDir())
+	res, _ := c.Merge(context.Background(), []Entry{{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "hello"}}, t.TempDir(), false)
 	c.Release()
 	if res.Added != 0 || strings.Count(chatText(t, c), "hello") != 1 {
 		t.Errorf("duplicate: %+v %q", res, chatText(t, c))
@@ -558,11 +557,10 @@ func TestPlaceAttachmentReusesFileACrashLeft(t *testing.T) {
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
 	c.Insert(Row{ID: "A", TS: 1}, func(int) Entry { return Entry{Sender: "Dana", Omitted: "image omitted"} })
 	data := []byte("photo")
-	sum := sha256.Sum256(data)
 	os.WriteFile(filepath.Join(c.Dir(), "00000000-PHOTO.jpg"), data, 0o600) // placed before the crash
 	src := filepath.Join(t.TempDir(), "again")
 	os.WriteFile(src, data, 0o600)
-	name, err := c.PlaceAttachment("A", src, "00000000-PHOTO.jpg", sum[:])
+	name, err := c.PlaceAttachment("A", src, "00000000-PHOTO.jpg")
 	if err != nil || name != "00000000-PHOTO.jpg" {
 		t.Errorf("name %q err %v", name, err)
 	}
@@ -576,7 +574,7 @@ func TestMergeStopsWhenCancelled(t *testing.T) {
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.Merge(ctx, []Entry{{Time: time.Unix(1, 0).UTC(), Sender: "Dana", Text: "x"}}, t.TempDir()); err == nil {
+	if _, err := c.Merge(ctx, []Entry{{Time: time.Unix(1, 0).UTC(), Sender: "Dana", Text: "x"}}, t.TempDir(), false); err == nil {
 		t.Error("cancelled import ran")
 	}
 }
@@ -599,5 +597,82 @@ func TestNoTempFilesInChatFolders(t *testing.T) {
 		if e.Name() != ChatFile {
 			t.Errorf("unexpected %s in chat folder", e.Name())
 		}
+	}
+}
+
+func TestTornIndexRowIsRepairedNotFatal(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 100}, text("a"))
+	c.Insert(Row{ID: "B", TS: 200}, text("b"))
+	idx, _ := os.ReadFile(c.indexPath())
+	os.WriteFile(c.indexPath(), idx[:len(idx)-5], 0o600) // crash mid-append
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, err := b.Chat("1@s.whatsapp.net")
+	if err != nil {
+		t.Fatalf("chat refused: %v", err)
+	}
+	if _, _, err := c2.Insert(Row{ID: "C", TS: 300}, text("c")); err != nil || c2.Len() != 3 {
+		t.Errorf("len %d err %v", c2.Len(), err)
+	}
+}
+
+func TestReleaseWritesEvenUnderAnotherHold(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Hold() // an import
+	c.Hold() // a history chunk
+	c.Insert(Row{ID: "A", TS: 1}, text("from history"))
+	c.Release() // the chunk is acknowledged now: it must be on disk
+	if !strings.Contains(chatText(t, c), "from history") {
+		t.Error("acknowledged entry only in memory")
+	}
+	c.Release()
+}
+
+func TestFindDuringHoldDoesNotMerge(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Hold()
+	c.Insert(Row{ID: "A", TS: 5}, text("x"))
+	c.Find(Entry{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "x"})
+	c.mu.Lock()
+	pending := len(c.pending)
+	c.mu.Unlock()
+	if pending != 1 {
+		t.Error("Find merged the held entries")
+	}
+	c.Release()
+}
+
+func TestDeletedMediaMovesOnlyAfterWrite(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, func(int) Entry { return Entry{Sender: "Dana", Attachment: "00000000-PHOTO.jpg"} })
+	os.WriteFile(filepath.Join(c.Dir(), "00000000-PHOTO.jpg"), []byte("x"), 0o600)
+	c.Hold()
+	if ok, err := c.MarkDeleted("A", DeletedByThem); !ok || err != nil {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir(), "00000000-PHOTO.jpg")); err != nil {
+		t.Error("moved before the entry was written")
+	}
+	c.Release()
+	if _, err := os.Stat(filepath.Join(a.Root(), ".wacli", "deleted", "WhatsApp Chat - Dana", "00000000-PHOTO.jpg")); err != nil {
+		t.Error("not moved after the write")
+	}
+	if !strings.Contains(chatText(t, c), "This message was deleted.") {
+		t.Error("entry not deleted")
+	}
+}
+
+func TestPosition(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "B", TS: 2}, text("b"))
+	c.Insert(Row{ID: "A", TS: 1}, text("a"))
+	if c.Position("B") != 1 || c.Position("A") != 0 || c.Position("X") != -1 {
+		t.Errorf("positions %d %d %d", c.Position("A"), c.Position("B"), c.Position("X"))
 	}
 }

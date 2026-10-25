@@ -313,7 +313,7 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 	if p.Direct == "" {
 		// No server copy to fetch; only the phone can upload it.
 		err = q.retryFromPhone(ctx, p, tmp)
-	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, "", tmp); err != nil && isExpired(err) {
+	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, tmp); err != nil && isExpired(err) {
 		err = q.retryFromPhone(ctx, p, tmp)
 	}
 	if err != nil {
@@ -323,7 +323,7 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 		q.failed(p, err)
 		return
 	}
-	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name, p.SHA256); err != nil {
+	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name); err != nil {
 		_ = os.Remove(tmp)
 		q.failed(p, err)
 		return

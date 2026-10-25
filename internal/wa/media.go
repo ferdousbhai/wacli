@@ -61,7 +61,9 @@ func MediaTypeFromString(mediaType string) (whatsmeow.MediaType, error) {
 	}
 }
 
-func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, mmsType string, targetPath string) (int64, error) {
+// DownloadMediaToFile downloads media to targetPath, which the caller owns
+// (a private temp path; it is removed on failure).
+func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, targetPath string) (int64, error) {
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
@@ -75,55 +77,47 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 	if err != nil {
 		return 0, err
 	}
-
-	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
-		return 0, fmt.Errorf("create output dir: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(filepath.Dir(targetPath), ".wacli-download-*")
-	if err != nil {
-		return 0, fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	success := false
-	defer func() {
-		_ = tmpFile.Close()
-		if !success {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
 	if _, err := mediaDownloadLength(fileLength); err != nil {
 		return 0, err
 	}
+	return writeTarget(targetPath, func(f *os.File) (int64, error) {
+		limited := &limitedDownloadFile{File: f, max: MaxMediaDownloadSize + maxEncryptedMediaDownloadOverhead, userMax: MaxMediaDownloadSize}
+		if err := cli.DownloadMediaWithPathToFile(ctx, directPath, encFileHash, fileHash, mediaKey, mt, "", false, limited); err != nil {
+			return 0, err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			return 0, err
+		}
+		if info.Size() > MaxMediaDownloadSize {
+			return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+		}
+		return info.Size(), nil
+	})
+}
 
-	limitedFile := &limitedDownloadFile{File: tmpFile, max: MaxMediaDownloadSize + maxEncryptedMediaDownloadOverhead, userMax: MaxMediaDownloadSize}
-	if err := cli.DownloadMediaWithPathToFile(ctx, directPath, encFileHash, fileHash, mediaKey, mt, mmsType, false, limitedFile); err != nil {
+// writeTarget creates targetPath, lets fill write it, syncs it, and removes
+// it again if anything failed.
+func writeTarget(targetPath string, fill func(f *os.File) (int64, error)) (int64, error) {
+	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
+		return 0, fmt.Errorf("create output dir: %w", err)
+	}
+	f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	if err != nil {
 		return 0, err
 	}
-	info, err := tmpFile.Stat()
+	n, err := fill(f)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	if err != nil {
-		return 0, fmt.Errorf("stat temp media file: %w", err)
+		os.Remove(targetPath)
+		return 0, err
 	}
-	if info.Size() > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
-	}
-	if err := tmpFile.Sync(); err != nil {
-		return 0, fmt.Errorf("flush temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, targetPath); err != nil {
-		return 0, fmt.Errorf("move media file: %w", err)
-	}
-	success = true
-
-	info, err = os.Stat(targetPath)
-	if err != nil {
-		return 0, fmt.Errorf("stat output file: %w", err)
-	}
-	return info.Size(), nil
+	return n, nil
 }
 
 // DownloadRetriedMediaToFile accepts a path from a successfully decrypted retry
@@ -153,36 +147,9 @@ func DownloadMediaDirectToFile(ctx context.Context, directPath string, encFileHa
 	if _, err := mediaDownloadLength(fileLength); err != nil {
 		return 0, err
 	}
-	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
-		return 0, fmt.Errorf("create output dir: %w", err)
-	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(targetPath), ".wacli-download-*")
-	if err != nil {
-		return 0, fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	success := false
-	defer func() {
-		_ = tmpFile.Close()
-		if !success {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	size, err := downloadAndDecryptDirect(ctx, mediaURL, encFileHash, fileHash, mediaKey, fileLength, mt, tmpFile)
-	if err != nil {
-		return 0, err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		return 0, fmt.Errorf("flush temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, targetPath); err != nil {
-		return 0, fmt.Errorf("move media file: %w", err)
-	}
-	success = true
-	return size, nil
+	return writeTarget(targetPath, func(f *os.File) (int64, error) {
+		return downloadAndDecryptDirect(ctx, mediaURL, encFileHash, fileHash, mediaKey, fileLength, mt, f)
+	})
 }
 
 func directMediaURL(directPath string, encFileHash []byte, mediaType whatsmeow.MediaType) (string, error) {
@@ -330,7 +297,6 @@ type limitedDownloadFile struct {
 	*os.File
 	max     int64
 	userMax int64
-	written int64
 }
 
 func (f *limitedDownloadFile) Write(p []byte) (int, error) {
@@ -341,18 +307,14 @@ func (f *limitedDownloadFile) Write(p []byte) (int, error) {
 	if off+int64(len(p)) > f.max {
 		return 0, f.limitError()
 	}
-	n, err := f.File.Write(p)
-	f.noteWritten(off + int64(n))
-	return n, err
+	return f.File.Write(p)
 }
 
 func (f *limitedDownloadFile) WriteAt(p []byte, off int64) (int, error) {
 	if off+int64(len(p)) > f.max {
 		return 0, f.limitError()
 	}
-	n, err := f.File.WriteAt(p, off)
-	f.noteWritten(off + int64(n))
-	return n, err
+	return f.File.WriteAt(p, off)
 }
 
 func (f *limitedDownloadFile) ReadFrom(r io.Reader) (int64, error) {
@@ -362,7 +324,6 @@ func (f *limitedDownloadFile) ReadFrom(r io.Reader) (int64, error) {
 	}
 	remaining := max(f.max-off, 0)
 	n, err := io.Copy(f.File, io.LimitReader(r, remaining))
-	f.noteWritten(off + n)
 	if err != nil {
 		return n, err
 	}
@@ -381,13 +342,7 @@ func (f *limitedDownloadFile) Truncate(size int64) error {
 	if size > f.max {
 		return f.limitError()
 	}
-	if err := f.File.Truncate(size); err != nil {
-		return err
-	}
-	if f.written > size {
-		f.written = size
-	}
-	return nil
+	return f.File.Truncate(size)
 }
 
 func (f *limitedDownloadFile) limitError() error {
@@ -396,12 +351,6 @@ func (f *limitedDownloadFile) limitError() error {
 		max = f.max
 	}
 	return fmt.Errorf("media too large; maximum download size is %d bytes", max)
-}
-
-func (f *limitedDownloadFile) noteWritten(end int64) {
-	if end > f.written {
-		f.written = end
-	}
 }
 
 func mediaDownloadLength(fileLength uint64) (int, error) {

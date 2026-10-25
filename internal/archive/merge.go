@@ -30,8 +30,9 @@ const matchWindow = 2 * time.Second
 // chat doesn't have yet. srcDir holds the export's attachments. Entries match
 // when sender and time agree within matchWindow and their content agrees. An
 // attachment missing from the export leaves its entry "… omitted". It stops
-// between entries when ctx ends.
-func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string) (res MergeResult, err error) {
+// between entries when ctx ends. With move, srcDir is wacli's own unpacked
+// copy and its files are moved into place instead of copied.
+func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string, move bool) (res MergeResult, err error) {
 	c.Hold()
 	defer func() {
 		if rerr := c.Release(); err == nil {
@@ -54,7 +55,7 @@ func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string) (res M
 		used[id] = true
 		res.Matched++
 		if e, ok := c.Get(id); ok && e.Omitted != "" && in.Attachment != "" {
-			restored, err := c.importFile(id, in.Attachment, srcDir)
+			restored, err := c.importFile(id, in.Attachment, srcDir, move)
 			if err != nil {
 				return res, err
 			}
@@ -84,7 +85,7 @@ func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string) (res M
 		}
 		res.Added++
 		if file != "" {
-			if _, err := c.importFile(row.ID, file, srcDir); err != nil {
+			if _, err := c.importFile(row.ID, file, srcDir, move); err != nil {
 				return res, err
 			}
 		}
@@ -101,28 +102,30 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	if err := c.useLocked(); err != nil {
 		return "", false
 	}
-	c.mergeLocked() // entries collected during a Hold count too
 	window := int64(matchWindow / time.Second)
 	t := in.Time.Unix()
-	best, bestD := -1, window+1
-	for i := sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS >= t-window }); i < len(c.rows) && c.rows[i].TS <= t+window; i++ {
-		d := c.rows[i].TS - t
+	bestID, bestD := "", window+1
+	consider := func(row Row, raw string) {
+		d := row.TS - t
 		if d < 0 {
 			d = -d
 		}
-		if d >= bestD || used[c.rows[i].ID] {
-			continue
+		if d > window || d >= bestD || used[row.ID] {
+			return
 		}
-		e, err := Parse(c.entries[i], c.a.opts.DateFormat, c.a.opts.Location)
-		if err != nil || e.Sender != in.Sender || !sameContent(e, in) {
-			continue
+		if e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location); err == nil && e.Sender == in.Sender && sameContent(e, in) {
+			bestID, bestD = row.ID, d
 		}
-		best, bestD = i, d
 	}
-	if best < 0 {
-		return "", false
+	for i := sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS >= t-window }); i < len(c.rows) && c.rows[i].TS <= t+window; i++ {
+		consider(c.rows[i], c.entries[i])
 	}
-	return c.rows[best].ID, true
+	// Entries collected during a Hold count too (checked in place: merging
+	// them for every lookup would undo what the Hold saves).
+	for _, p := range c.pending {
+		consider(p.row, p.text)
+	}
+	return bestID, bestID != ""
 }
 
 // Find reports whether the chat already has an entry for the same message as
@@ -151,36 +154,46 @@ func normalizeText(s string) string {
 	return strings.TrimSpace(mentionRE.ReplaceAllString(s, "@"))
 }
 
-// importFile copies an export's attachment for entry id into the chat folder
-// (through the temp folder, placed under the chat lock like a download). It
-// reports false when the export doesn't contain the file.
-func (c *Chat) importFile(id, name, srcDir string) (bool, error) {
+// importFile brings an export's attachment for entry id into the chat folder,
+// placed under the chat lock like a download. It reports false when the
+// export doesn't contain the file.
+func (c *Chat) importFile(id, name, srcDir string, move bool) (bool, error) {
 	base := filepath.Base(name)
 	if base != name || base == "." || base == ".." {
 		return false, fmt.Errorf("unsafe attachment name %q", name)
 	}
-	src, err := os.Open(filepath.Join(srcDir, base))
-	if errors.Is(err, os.ErrNotExist) {
+	src := filepath.Join(srcDir, base)
+	if !move {
+		// Never move the user's own files: copy them to the temp folder.
+		in, err := os.Open(src)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		defer in.Close()
+		tmp, err := os.CreateTemp(c.a.TmpDir(), "import-*")
+		if err != nil {
+			return false, err
+		}
+		if _, err = io.Copy(tmp, in); err == nil {
+			err = tmp.Close()
+		} else {
+			tmp.Close()
+		}
+		if err != nil {
+			os.Remove(tmp.Name())
+			return false, err
+		}
+		src = tmp.Name()
+	} else if !exists(src) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	defer src.Close()
-	tmp, err := os.CreateTemp(c.a.TmpDir(), "import-*")
-	if err != nil {
-		return false, err
-	}
-	if _, err = io.Copy(tmp, src); err == nil {
-		err = tmp.Close()
-	} else {
-		tmp.Close()
-	}
-	if err == nil {
-		_, err = c.PlaceAttachment(id, tmp.Name(), base, nil)
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
+	if _, err := c.PlaceAttachment(id, src, base); err != nil {
+		if !move {
+			os.Remove(src)
+		}
 		return false, err
 	}
 	return true, nil

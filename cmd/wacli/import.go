@@ -49,17 +49,19 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 
 // doImport needs no connection, only the archive.
 func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) {
-	dir := r.File
+	dir, unpacked := r.File, false
 	if strings.EqualFold(filepath.Ext(r.File), ".zip") {
-		tmp, err := os.MkdirTemp("", "wacli-import-")
+		// Unpack inside the archive (same disk, cleared after a crash),
+		// so attachments can be moved into place rather than copied.
+		tmp, err := os.MkdirTemp(ar.TmpDir(), "import-")
 		if err != nil {
 			return nil, err
 		}
 		defer os.RemoveAll(tmp)
-		if err := unzipFlat(r.File, tmp); err != nil {
+		if err := unzipFlat(ctx, r.File, tmp); err != nil {
 			return nil, err
 		}
-		dir = tmp
+		dir, unpacked = tmp, true
 	}
 	target := r.Chat
 	if target == "" {
@@ -78,7 +80,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.Merge(ctx, entries, dir)
+	res, err := c.Merge(ctx, entries, dir, unpacked)
 	if err != nil {
 		return nil, err
 	}
@@ -91,13 +93,16 @@ const maxImportFile = 2 << 30
 
 // unzipFlat extracts the top-level files of an export; exports have no
 // subfolders, and anything else is refused rather than written outside dst.
-func unzipFlat(src, dst string) error {
+func unzipFlat(ctx context.Context, src, dst string) error {
 	zr, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer zr.Close()
 	for _, zf := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if zf.FileInfo().IsDir() || strings.HasPrefix(filepath.Base(zf.Name), "._") || strings.Contains(zf.Name, "__MACOSX") {
 			continue
 		}

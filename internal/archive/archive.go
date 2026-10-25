@@ -389,9 +389,12 @@ type Chat struct {
 	// pending holds entries inserted during a Hold until they are merged.
 	pending     []pendingEntry
 	pendingByID map[string]int
-	pendingTS   []int64   // pending timestamps, newest first
-	loaded      bool      // rows and entries are in memory (see Trim)
-	lastUsed    time.Time // for Trim
+	pendingTS   []int64 // pending timestamps, newest first
+	// deletedFiles are attachments of deleted entries, moved out of the
+	// chat folder once the change is written.
+	deletedFiles []string
+	loaded       bool      // rows and entries are in memory (see Trim)
+	lastUsed     time.Time // for Trim
 }
 
 // useLocked loads the chat if Trim unloaded it, and notes the use.
@@ -449,7 +452,7 @@ func (c *Chat) load() error {
 	if missing && len(c.rows) > 0 {
 		// The folder was moved or deleted outside wacli. Keep the old index
 		// aside and start the chat over, so new messages still land.
-		c.problem("%s: _chat.txt was missing; started it again (old index kept as %s.orphaned)", c.info.Folder, filepath.Base(c.indexPath()))
+		c.problem("%s: _chat.txt was missing; started it again (old index kept as %s.orphaned-<time>)", c.info.Folder, filepath.Base(c.indexPath()))
 		if !c.a.opts.ReadOnly {
 			if err := os.Rename(c.indexPath(), fmt.Sprintf("%s.orphaned-%d", c.indexPath(), time.Now().Unix())); err != nil {
 				return err
@@ -611,12 +614,13 @@ func (c *Chat) Hold() {
 	c.mu.Unlock()
 }
 
-// Release ends a Hold and writes what it collected.
+// Release ends a Hold and writes what's unwritten, even if another Hold on
+// the chat continues: whoever releases may acknowledge its messages next.
 func (c *Chat) Release() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.hold--
-	if c.hold > 0 || !c.dirty {
+	if !c.dirty {
 		return nil
 	}
 	return c.flushLocked()
@@ -737,9 +741,9 @@ func (c *Chat) updateLocked(id string, fn func(e *Entry) bool) (bool, error) {
 // was deleted meanwhile the file goes to .wacli/deleted; if it already has a
 // file (an import restored it) the download is dropped.
 //
-// If want already holds the same file (sha256), it's a download a crash
-// interrupted after the move; that file is kept instead of a copy.
-func (c *Chat) PlaceAttachment(id, src, want string, sha256sum []byte) (string, error) {
+// If want already holds the same content, it's a file a crash left after the
+// move; that one is kept instead of adding a copy.
+func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 	if c.a.opts.ReadOnly {
 		return "", ErrReadOnly
 	}
@@ -771,7 +775,7 @@ func (c *Chat) PlaceAttachment(id, src, want string, sha256sum []byte) (string, 
 		return "", err
 	}
 	name := filepath.Base(want)
-	if len(sha256sum) > 0 && fileHasSHA256(filepath.Join(dir, name), sha256sum) {
+	if sameFile(filepath.Join(dir, name), src) {
 		if err := os.Remove(src); err != nil {
 			return "", err
 		}
@@ -787,22 +791,99 @@ func (c *Chat) PlaceAttachment(id, src, want string, sha256sum []byte) (string, 
 	return name, nil
 }
 
-func fileHasSHA256(path string, want []byte) bool {
+// sameFile reports whether files a and b both exist with equal content.
+func sameFile(a, b string) bool {
+	sa, ok := fileSHA256(a)
+	if !ok {
+		return false
+	}
+	sb, ok := fileSHA256(b)
+	return ok && bytes.Equal(sa, sb)
+}
+
+func fileSHA256(path string) ([]byte, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return false
+		return nil, false
 	}
-	return bytes.Equal(h.Sum(nil), want)
+	return h.Sum(nil), true
 }
 
 // deletedDirLocked is where media of messages deleted for everyone is kept:
 // outside the chat folder, which stays identical to an export.
 func (c *Chat) deletedDirLocked() string { return c.a.metaPath("deleted", c.info.Folder) }
+
+// MarkDeleted turns the entry for id into "deleted" (text is DeletedByThem or
+// DeletedByMe), keeping its time. Its media leaves the chat folder (exports
+// don't contain it) for .wacli/deleted, but only once the entry saying
+// "deleted" is on disk, so a crash can't leave an attachment pointing at
+// nothing. It reports whether the entry existed.
+func (c *Chat) MarkDeleted(id, text string) (bool, error) {
+	if c.a.opts.ReadOnly {
+		return false, ErrReadOnly
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return false, err
+	}
+	var file string
+	changed, err := c.updateLocked(id, func(e *Entry) bool {
+		if e.Deleted != "" {
+			return false
+		}
+		file = e.Attachment
+		e.MakeDeleted(text)
+		return true
+	})
+	if err != nil || !changed {
+		_, exists := c.lookupLocked(id)
+		return exists, err
+	}
+	if file != "" {
+		c.deletedFiles = append(c.deletedFiles, file)
+	}
+	return true, c.saveLocked()
+}
+
+// moveDeletedLocked moves media of deleted entries out of the chat folder;
+// flushLocked calls it after writing.
+func (c *Chat) moveDeletedLocked() {
+	if len(c.deletedFiles) == 0 {
+		return
+	}
+	dst := c.deletedDirLocked()
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return // stays put; tried again on the next write
+	}
+	var left []string
+	for _, f := range c.deletedFiles {
+		err := os.Rename(filepath.Join(c.dirLocked(), f), filepath.Join(dst, f))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			left = append(left, f)
+		}
+	}
+	c.deletedFiles = left
+}
+
+// Position returns the entry's 0-based position in the chat, or -1.
+func (c *Chat) Position(id string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.useLocked() != nil {
+		return -1
+	}
+	c.mergeLocked()
+	if i, ok := c.byID[id]; ok {
+		return i
+	}
+	return -1
+}
 
 // freeName returns name, or name-2, name-3… if dir already has that file.
 func freeName(dir, name string) string {
@@ -874,6 +955,7 @@ func (c *Chat) flushLocked() error {
 		return err
 	}
 	c.dirty = false
+	c.moveDeletedLocked()
 	return nil
 }
 
@@ -925,13 +1007,16 @@ func readIndex(path string) ([]Row, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		// A row cut short by a crash or a full disk is skipped: the count
+		// then disagrees with _chat.txt and load realigns the index,
+		// instead of refusing the chat.
 		parts := strings.Split(sc.Text(), "\t")
 		if len(parts) != 4 {
-			return nil, fmt.Errorf("%s: malformed row %q", path, sc.Text())
+			continue
 		}
 		ts, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			continue
 		}
 		rows = append(rows, Row{ID: parts[0], TS: ts, FromMe: parts[2] == "1", Sender: parts[3]})
 	}

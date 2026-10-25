@@ -9,8 +9,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// lockOffset places the locked byte far past the PID text: Windows locks
+// are mandatory, and Probe must still be able to read the file.
+const lockOffset = 1 << 30
+
 func lockFile(f *os.File) error {
-	var ol windows.Overlapped
+	ol := windows.Overlapped{Offset: lockOffset}
 	return windows.LockFileEx(
 		windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
@@ -22,7 +26,7 @@ func lockFile(f *os.File) error {
 }
 
 func unlockFile(f *os.File) error {
-	var ol windows.Overlapped
+	ol := windows.Overlapped{Offset: lockOffset}
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ol)
 }
 
