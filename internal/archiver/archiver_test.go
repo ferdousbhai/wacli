@@ -816,8 +816,11 @@ func TestLiveForgeriesOfUnarchivedOrWacliMessages(t *testing.T) {
 	a.handle(live(group, mallory, "X3", false, t0+7, revoke("OLD2", dana)))
 	a.handle(live(group, mallory, "X4", false, t0+8, &waE2E.Message{CallLogMesssage: &waE2E.CallLogMessage{IsVideo: proto.Bool(true), DurationSecs: proto.Int64(7300)}}))
 	got := chatFile(t, ar, group)
-	if !strings.HasPrefix(got, before) {
-		t.Errorf("an archived line changed: %q", got)
+	if got != before {
+		t.Errorf("forgeries archived: %q", got)
+	}
+	if _, ok := ar.Info("6284444444444@s.whatsapp.net"); ok || len(ar.Chats()) != 1 {
+		t.Errorf("a rejected message made a chat: %+v", ar.Chats())
 	}
 	for _, forged := range []string{"forged", "never said", "deleted", "call"} {
 		if strings.Contains(got, forged) {

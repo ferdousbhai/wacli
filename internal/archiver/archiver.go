@@ -296,6 +296,16 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	if !pm.HasContent() && !pm.Edited && invisiblePayload(pm.UnhandledPayload) {
 		return
 	}
+	if pm.Call != nil && !pm.FromMe {
+		return // call records come from your own phone; others' are forged
+	}
+	// Live edits, deletes and redeliveries name a message by ID only; the
+	// phone checked history ones, but live, anyone in the chat could name
+	// someone else's message. Checked before a folder is made for it.
+	if b == nil && !a.mayArchiveLive(ctx, a.knownChat(ctx, pm.Chat), pm) {
+		a.logf("ignored %s in %s: it can't be checked as its sender's", pm.ID, pm.Chat)
+		return
+	}
 	c, err := a.chat(ctx, pm.Chat, hint)
 	if err != nil {
 		a.logf("warning: %v", err)
@@ -304,13 +314,6 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	b.use(c)
 	row := archive.Row{ID: pm.ID, TS: pm.Timestamp.Unix(), FromMe: pm.FromMe, Sender: pm.SenderJID}
 
-	// Live edits, deletes and redeliveries name a message by ID only; the
-	// phone checked history ones, but live, anyone in the chat could name
-	// someone else's message.
-	if b == nil && !a.mayArchiveLive(ctx, c, pm) {
-		a.logf("ignored a change to %s in %s from someone other than its sender", pm.ID, c.Name())
-		return
-	}
 	switch {
 	case pm.Revoked:
 		a.applyDelete(ctx, b, c, pm, row)
@@ -458,7 +461,7 @@ func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender str
 		e.DocLabel = archive.DocLabel(pm.Media.Filename, pm.Media.PageCount)
 	case pm.Media != nil:
 		e.Text = a.names.mentions(ctx, pm.Media.Caption, pm.MentionedJIDs)
-	case pm.Call != nil && pm.FromMe: // call records come from your own phone
+	case pm.Call != nil:
 		e.System, e.Text = true, callText(pm.Call)
 	case pm.Poll != nil:
 		e.System = true
@@ -661,11 +664,12 @@ func (a *Archiver) fillBlank(ctx context.Context, b *batch, c *archive.Chat, pm 
 // repairs); no WhatsApp message has one. A change to a message not
 // archived yet can't be checked: an edit is dropped (the original comes
 // with history), and a delete is kept only as the sender's own.
+// c is nil for a chat not archived yet.
 func (a *Archiver) mayArchiveLive(ctx context.Context, c *archive.Chat, pm wa.ParsedMessage) bool {
 	switch {
 	case strings.Contains(pm.ID, ":"):
 		return false
-	case c.Has(pm.ID):
+	case c != nil && c.Has(pm.ID):
 		return a.mayChange(ctx, c, pm)
 	case pm.Edited:
 		return false
@@ -674,6 +678,19 @@ func (a *Archiver) mayArchiveLive(ctx context.Context, c *archive.Chat, pm wa.Pa
 		return pm.FromMe || a.isAdmin(ctx, pm.Chat, pm.SenderJID)
 	}
 	return true
+}
+
+// knownChat returns the archived chat for jid, or nil; it never makes one.
+func (a *Archiver) knownChat(ctx context.Context, jid types.JID) *archive.Chat {
+	key := a.canonical(ctx, jid).String()
+	if _, ok := a.ar.Info(key); !ok {
+		return nil
+	}
+	c, err := a.ar.Chat(key)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // mayChange reports whether pm may change the archived message with its
