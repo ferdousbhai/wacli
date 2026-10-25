@@ -18,7 +18,7 @@
 
 ## Build, Test, and Development Commands
 - `make build` → `dist/wacli`; `make install` → `~/.local/bin/wacli` (then `systemctl --user restart wacli-sync`).
-- `make test`: `go test -race ./...`, Windows vet of the cgo-free packages, cgo-required check.
+- `make test`: `go test -race ./...`, Windows and 32-bit (GOARCH=arm) vet of the cgo-free packages, cgo-required check.
 - `make lint`: gofmt, `go vet`, deadcode (production and tests), govulncheck.
 - `make check`: lint + test + build. Must pass before every commit; CI runs it.
 - `WACLI_REFERENCE_EXPORT=<unzipped iPhone export> go test -run Reference ./internal/archive` checks the format against a real export.

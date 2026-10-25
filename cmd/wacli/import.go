@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ferdousbhai/wacli/internal/wa"
+
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/out"
 	"github.com/spf13/cobra"
@@ -99,7 +101,7 @@ func exportChatName(path string) string {
 }
 
 // maxImportFile is WhatsApp's own limit for a shared file.
-const maxImportFile = 2 << 30
+const maxImportFile = wa.MaxMediaDownloadSize
 
 // unzipFlat extracts the top-level files of an export; exports have no
 // subfolders, and anything else is refused rather than written outside dst.

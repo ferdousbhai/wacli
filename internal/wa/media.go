@@ -77,7 +77,7 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 	if err != nil {
 		return 0, err
 	}
-	if _, err := mediaDownloadLength(fileLength); err != nil {
+	if err := checkMediaLength(fileLength); err != nil {
 		return 0, err
 	}
 	return writeTarget(targetPath, func(f *os.File) (int64, error) {
@@ -144,7 +144,7 @@ func DownloadMediaDirectToFile(ctx context.Context, directPath string, encFileHa
 	if err != nil {
 		return 0, err
 	}
-	if _, err := mediaDownloadLength(fileLength); err != nil {
+	if err := checkMediaLength(fileLength); err != nil {
 		return 0, err
 	}
 	return writeTarget(targetPath, func(f *os.File) (int64, error) {
@@ -353,12 +353,10 @@ func (f *limitedDownloadFile) limitError() error {
 	return fmt.Errorf("media too large; maximum download size is %d bytes", max)
 }
 
-func mediaDownloadLength(fileLength uint64) (int, error) {
+// checkMediaLength rejects media WhatsApp says is larger than wacli downloads.
+func checkMediaLength(fileLength uint64) error {
 	if fileLength > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large (%d bytes); maximum download size is %d bytes", fileLength, int64(MaxMediaDownloadSize))
+		return fmt.Errorf("media too large (%d bytes); maximum download size is %d bytes", fileLength, int64(MaxMediaDownloadSize))
 	}
-	if fileLength > 0 {
-		return int(fileLength), nil
-	}
-	return -1, nil
+	return nil
 }

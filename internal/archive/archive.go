@@ -522,38 +522,57 @@ func (c *Chat) reconcile() error {
 	return nil
 }
 
-// realign pairs each entry with its index row. Both are in time order, so
-// each entry takes the nearest following row at the same instant, or at the
-// zone shift the previous pair matched at: entries are rendered in whatever
-// zone the computer had when they were written. Until a pair has set that
-// shift, a row a whole number of 15-minute steps away (zone offsets are
-// multiples of 15 minutes, at most 26 hours apart) also counts, close by.
-// Rows without entries (a crash between writing the index and _chat.txt) can
-// come in a run as long as a history batch, so the search reaches past them.
-// Entries without a row get one WhatsApp won't recognize; they can no longer
-// be edited or deleted, but the chat keeps working.
+// realign pairs each entry with its index row. Both are in time order, and
+// an entry shows the time in whatever zone the computer had when it was
+// written, so an entry takes the nearest following row at the same instant
+// or at the zone shift the previous pair matched at. When neither exists the
+// zone changed (a trip, a daylight-saving night): a row a whole number of
+// 15-minute steps away (at most 26 hours) is taken as the new shift if the
+// next entry pairs at that shift too. Before any shift is known, an
+// unconfirmed step is accepted close by. Rows without entries (a crash
+// between writing the index and _chat.txt) can come in a run as long as a
+// history batch, so searches reach past them. Entries without a row get one
+// WhatsApp won't recognize; they can no longer be edited or deleted, but the
+// chat keeps working.
 func realign(entries []string, rows []Row, dateFormat string, loc *time.Location) []Row {
 	const block, maxShift = 15 * 60, 26 * 3600
-	out := make([]Row, len(entries))
-	next := 0
+	tss := make([]int64, len(entries))
 	var lastTS int64
-	offset, known := int64(0), false
 	for i, raw := range entries {
 		ts := lastTS
 		if e, err := Parse(raw, dateFormat, loc); err == nil {
 			ts = e.Time.Unix()
 		}
-		lastTS = ts
-		end := min(len(rows), next+64)
-		wide := min(len(rows), end+max(0, len(rows)-len(entries)))
-		match := -1
-		for k := next; k < wide && match < 0; k++ {
-			if d := rows[k].TS - ts; d == 0 || (known && d == offset) {
-				match = k
+		tss[i], lastTS = ts, ts
+	}
+	reach := 64 + max(0, len(rows)-len(entries))
+	isStep := func(d int64) bool { return d%block == 0 && d >= -maxShift && d <= maxShift }
+	// find returns the first row from `from` (within limit) at shift d.
+	find := func(from, limit int, ts, d int64) int {
+		for k := from; k < min(len(rows), from+limit); k++ {
+			if rows[k].TS-ts == d {
+				return k
 			}
 		}
-		for k := next; k < end && match < 0 && !known; k++ {
-			if d := rows[k].TS - ts; d%block == 0 && d >= -maxShift && d <= maxShift {
+		return -1
+	}
+	out := make([]Row, len(entries))
+	next := 0
+	offset, known := int64(0), false
+	for i, ts := range tss {
+		match := find(next, reach, ts, 0)
+		if known && offset != 0 {
+			if m := find(next, reach, ts, offset); m >= 0 && (match < 0 || m < match) {
+				match = m
+			}
+		}
+		for k := next; match < 0 && i+1 < len(tss) && k < min(len(rows), next+reach); k++ {
+			if d := rows[k].TS - ts; isStep(d) && find(k+1, reach, tss[i+1], d) >= 0 {
+				match = k // a new shift, confirmed by the next entry
+			}
+		}
+		for k := next; match < 0 && !known && k < min(len(rows), next+64); k++ {
+			if isStep(rows[k].TS - ts) {
 				match = k
 			}
 		}

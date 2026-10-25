@@ -833,3 +833,84 @@ func TestRealignZoneShiftWithIndexOnlyRows(t *testing.T) {
 		t.Errorf("wrong IDs %d, repair IDs %d (of %d)", wrong, repaired, len(entries))
 	}
 }
+
+// realignScore counts entries paired with another message's row, and
+// entries (other than the hand-added ones, truth "none") left without one.
+func realignScore(got []Row, truth []string) (wrong, lost int) {
+	for i, g := range got {
+		switch {
+		case g.ID == truth[i]:
+		case strings.HasPrefix(g.ID, "repair:"):
+			if truth[i] != "none" {
+				lost++
+			}
+		default:
+			wrong++
+		}
+	}
+	return
+}
+
+func TestRealignAcrossATripMidChat(t *testing.T) {
+	jkt, _ := time.LoadLocation("Asia/Jakarta")
+	for _, trip := range []int{10, 200} {
+		var rows []Row
+		var entries, truth []string
+		ts := int64(1_700_000_000)
+		for i := range 400 + trip {
+			ts += 37
+			loc := time.UTC
+			if i >= 100 && i < 100+trip {
+				loc = jkt // written while away
+			}
+			id := fmt.Sprintf("m%d", i)
+			rows = append(rows, Row{ID: id, TS: ts})
+			entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).In(loc), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+			truth = append(truth, id)
+		}
+		entries = append(entries, Render(Entry{Time: time.Unix(ts+5, 0).UTC(), Sender: "Me", Text: "note"}, DefaultDateFormat))
+		truth = append(truth, "none") // a hand-added line
+		if wrong, lost := realignScore(realign(entries, rows, DefaultDateFormat, time.UTC), truth); wrong+lost != 0 {
+			t.Errorf("trip %d: wrong %d, lost %d", trip, wrong, lost)
+		}
+	}
+}
+
+func TestRealignAcrossDaylightSavingFallBack(t *testing.T) {
+	ny, _ := time.LoadLocation("America/New_York")
+	start := time.Date(2025, 11, 2, 0, 0, 0, 0, ny).Unix()
+	var rows []Row
+	var entries, truth []string
+	for i := range 300 { // 00:00–03:45, through the repeated 01:xx hour
+		ts := start + int64(i)*45
+		id := fmt.Sprintf("m%d", i)
+		rows = append(rows, Row{ID: id, TS: ts})
+		entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).In(ny), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+		truth = append(truth, id)
+	}
+	entries = append(entries, Render(Entry{Time: time.Unix(start+300*45, 0).In(ny), Sender: "Me", Text: "note"}, DefaultDateFormat))
+	truth = append(truth, "none")
+	if wrong, lost := realignScore(realign(entries, rows, DefaultDateFormat, ny), truth); wrong+lost != 0 {
+		t.Errorf("wrong %d, lost %d", wrong, lost)
+	}
+}
+
+func TestRealignOtherZoneBehindABigCrashedBatch(t *testing.T) {
+	jkt, _ := time.LoadLocation("Asia/Jakarta")
+	var rows []Row
+	var entries, truth []string
+	for i := range 200 { // index-only rows of a crashed history batch
+		rows = append(rows, Row{ID: fmt.Sprintf("hist%d", i), TS: int64(1_699_990_000 + i*13)})
+	}
+	ts := int64(1_700_000_000)
+	for i := range 300 {
+		ts += 41
+		id := fmt.Sprintf("m%d", i)
+		rows = append(rows, Row{ID: id, TS: ts})
+		entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).In(jkt), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+		truth = append(truth, id)
+	}
+	if wrong, lost := realignScore(realign(entries, rows, DefaultDateFormat, time.UTC), truth); wrong+lost != 0 {
+		t.Errorf("wrong %d, lost %d", wrong, lost)
+	}
+}

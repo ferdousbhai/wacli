@@ -44,19 +44,14 @@ func TestMediaTypeFromString(t *testing.T) {
 	}
 }
 
-func TestMediaDownloadLengthRejectsOversizedMedia(t *testing.T) {
-	_, err := mediaDownloadLength(MaxMediaDownloadSize + 1)
-	if err == nil || !strings.Contains(err.Error(), "media too large") {
-		t.Fatalf("expected media too large error, got %v", err)
+func TestCheckMediaLength(t *testing.T) {
+	if err := checkMediaLength(MaxMediaDownloadSize + 1); err == nil || !strings.Contains(err.Error(), "media too large") {
+		t.Fatalf("oversized: %v", err)
 	}
-}
-
-func TestMediaDownloadLength(t *testing.T) {
-	if got, err := mediaDownloadLength(0); err != nil || got != -1 {
-		t.Fatalf("length(0) = %d, %v; want -1, nil", got, err)
-	}
-	if got, err := mediaDownloadLength(123); err != nil || got != 123 {
-		t.Fatalf("length(123) = %d, %v; want 123, nil", got, err)
+	for _, n := range []uint64{0, 123, MaxMediaDownloadSize} {
+		if err := checkMediaLength(n); err != nil {
+			t.Fatalf("%d: %v", n, err)
+		}
 	}
 }
 

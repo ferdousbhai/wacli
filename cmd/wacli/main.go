@@ -57,7 +57,7 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&f.storeDir, "store", envOr("WACLI_STORE_DIR", config.DefaultStoreDir()), "directory holding the WhatsApp session (session.db)")
+	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp session (session.db)")
 	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the chat folders")
 	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", envOr("WACLI_DATE_FORMAT", archive.DefaultDateFormat), "Go time layout for entry timestamps, matching your phone's region")
 	root.PersistentFlags().BoolVar(&f.asJSON, "json", false, "print machine-readable JSON")
