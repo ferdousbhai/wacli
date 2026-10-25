@@ -639,6 +639,14 @@ func (c *Chat) reconcile() error {
 			if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
 				return err
 			}
+			// Its backfill starts over too: the history it reached is gone.
+			c.a.mu.Lock()
+			c.info.Backfill, c.info.BackfillDone = nil, false
+			err := c.a.saveMetaLocked()
+			c.a.mu.Unlock()
+			if err != nil {
+				return err
+			}
 		}
 		c.rows = nil
 	}

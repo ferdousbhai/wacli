@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ferdousbhai/wacli/internal/fsutil"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/socket"
 	"go.mau.fi/whatsmeow/util/cbcutil"
@@ -99,7 +98,7 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 // writeTarget creates targetPath, lets fill write it, syncs it, and removes
 // it again if anything failed.
 func writeTarget(targetPath string, fill func(f *os.File) (int64, error)) (int64, error) {
-	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
 	}
 	f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)

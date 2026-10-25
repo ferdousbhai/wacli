@@ -87,3 +87,28 @@ func TestChatFileDeletedWhileRunningIsRecreated(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+func TestRestartedChatForgetsBackfillProgress(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	c.Insert(Row{ID: "B", TS: 2}, text("two"))
+	a.UpdateInfo(c.JID(), func(ci *ChatInfo) { ci.Backfill = &Row{ID: "A", TS: 1}; ci.BackfillDone = true })
+	os.RemoveAll(c.Dir()) // user deletes the folder while wacli is stopped
+
+	b, err := Open(Options{Root: root, Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := b.Chat("1@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Len() != 0 {
+		t.Fatalf("Len=%d", c2.Len())
+	}
+	info, _ := b.Info(c2.JID())
+	if info.BackfillDone || info.Backfill != nil {
+		t.Errorf("chat started over but backfill still says done=%v cursor=%v: `wacli backfill` won't refill it", info.BackfillDone, info.Backfill)
+	}
+}
