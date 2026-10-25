@@ -783,3 +783,23 @@ func TestLastArchivedSurvivesARestart(t *testing.T) {
 		t.Error("last archived lost on restart")
 	}
 }
+
+func TestOthersCantRewriteMessages(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	mallory := "6284444444444@s.whatsapp.net"
+	a.handle(live(group, dana, "D1", false, t0, text("hello")))
+	a.handle(live(group, me, "A1", true, t0+1, text("ok")))
+	a.handle(live(group, dana, "D2", false, t0+2, text("bye")))
+	a.handle(live(group, mallory, "X1", false, t0+10, edit("D1", text("I owe Mallory $5000"))))
+	a.handle(live(group, mallory, "X2", false, t0+11, edit("A1", text("I agree"))))
+	a.handle(live(group, mallory, "X3", false, t0+12, revoke("D2", "")))   // claims to be the sender's own delete
+	a.handle(live(group, mallory, "X4", false, t0+13, revoke("D2", dana))) // not an admin
+	got := chatFile(t, ar, group)
+	if strings.Contains(got, "Mallory") || strings.Contains(got, "agree") || strings.Contains(got, "deleted") {
+		t.Errorf("forged change archived: %q", got)
+	}
+	a.handle(live(group, dana, "E1", false, t0+20, edit("D1", text("hello there"))))
+	if got := chatFile(t, ar, group); !strings.Contains(got, "hello there") {
+		t.Errorf("the sender's own edit was refused: %q", got)
+	}
+}

@@ -304,6 +304,13 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	b.use(c)
 	row := archive.Row{ID: pm.ID, TS: pm.Timestamp.Unix(), FromMe: pm.FromMe, Sender: pm.SenderJID}
 
+	// Live edits, deletes and redeliveries name a message by ID only; the
+	// phone checked history ones, but live, anyone in the chat could name
+	// someone else's message.
+	if b == nil && c.Has(pm.ID) && !a.mayChange(ctx, c, pm) {
+		a.logf("ignored a change to %s in %s from someone other than its sender", pm.ID, c.Name())
+		return
+	}
 	switch {
 	case pm.Revoked:
 		a.applyDelete(ctx, b, c, pm, row)
@@ -647,4 +654,49 @@ func (a *Archiver) fillBlank(ctx context.Context, b *batch, c *archive.Chat, pm 
 		return true
 	})
 	a.wrote(b, c, err)
+}
+
+// mayChange reports whether pm may change the archived message with its
+// ID: it comes from that message's sender, or deletes it as a group admin.
+func (a *Archiver) mayChange(ctx context.Context, c *archive.Chat, pm wa.ParsedMessage) bool {
+	row, ok := c.Row(pm.ID)
+	if !ok || (row.Sender == "" && !row.FromMe) {
+		return true // nothing to compare with (imported from an export)
+	}
+	if pm.Revoked && pm.TargetSender != "" { // an admin deleting someone else's
+		if !row.FromMe && !a.samePerson(ctx, row.Sender, pm.TargetSender) {
+			return false
+		}
+		return pm.FromMe || a.isAdmin(ctx, pm.Chat, pm.SenderJID) // your own phone checked you are one
+	}
+	if row.FromMe || pm.FromMe {
+		return row.FromMe == pm.FromMe
+	}
+	return a.samePerson(ctx, row.Sender, pm.SenderJID)
+}
+
+func (a *Archiver) samePerson(ctx context.Context, x, y string) bool {
+	jx, err1 := types.ParseJID(x)
+	jy, err2 := types.ParseJID(y)
+	if err1 != nil || err2 != nil || jx.IsEmpty() || jy.IsEmpty() {
+		return false
+	}
+	return a.canonical(ctx, jx).User == a.canonical(ctx, jy).User
+}
+
+func (a *Archiver) isAdmin(ctx context.Context, chat types.JID, sender string) bool {
+	who, err := types.ParseJID(sender)
+	if err != nil || chat.Server != types.GroupServer {
+		return false
+	}
+	info, err := a.wa.GetGroupInfo(ctx, chat)
+	if err != nil || info == nil {
+		return false // unknown: keep the message
+	}
+	for _, p := range info.Participants {
+		if (a.samePerson(ctx, p.JID.String(), who.String()) || (!p.LID.IsEmpty() && a.samePerson(ctx, p.LID.String(), who.String()))) && (p.IsAdmin || p.IsSuperAdmin) {
+			return true
+		}
+	}
+	return false
 }

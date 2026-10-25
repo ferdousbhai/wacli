@@ -1,7 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,5 +61,26 @@ func TestForwardStopsOnCancel(t *testing.T) {
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("forward returned after %v", d)
+	}
+}
+
+func TestUnzipLimits(t *testing.T) {
+	zpath := filepath.Join(t.TempDir(), "x.zip")
+	f, _ := os.Create(zpath)
+	zw := zip.NewWriter(f)
+	for _, name := range []string{"a", "b"} {
+		w, _ := zw.Create(name)
+		w.Write([]byte("12345678"))
+	}
+	zw.Close()
+	f.Close()
+	defer func(total int64, files int) { maxImportTotal, maxImportFiles = total, files }(maxImportTotal, maxImportFiles)
+	maxImportTotal = 10
+	if err := unzipFlat(context.Background(), zpath, t.TempDir()); err == nil {
+		t.Error("a zip larger than the total was unpacked")
+	}
+	maxImportTotal, maxImportFiles = 1<<20, 1
+	if err := unzipFlat(context.Background(), zpath, t.TempDir()); err == nil {
+		t.Error("a zip with too many files was unpacked")
 	}
 }

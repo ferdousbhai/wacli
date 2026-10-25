@@ -11,6 +11,7 @@ import (
 
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/out"
+	"github.com/ferdousbhai/wacli/internal/wa"
 	"github.com/spf13/cobra"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -103,6 +104,14 @@ func doSend(ctx context.Context, s *session, r request) (any, error) {
 // mediaMessage uploads the file and returns the message to send, and the
 // file's bytes for the archive.
 func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E.Message, []byte, error) {
+	// Read in the sync, which must not block on a pipe or fill its memory.
+	if st, err := os.Stat(path); err != nil {
+		return nil, nil, err
+	} else if !st.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s is not a regular file", path)
+	} else if st.Size() > wa.MaxMediaDownloadSize {
+		return nil, nil, fmt.Errorf("%s is larger than WhatsApp allows (2 GB)", path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err

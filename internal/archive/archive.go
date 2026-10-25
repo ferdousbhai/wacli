@@ -801,6 +801,22 @@ func (c *Chat) Len() int {
 	return len(c.rows) + len(c.pending)
 }
 
+// Row returns the bookkeeping row of the entry for id.
+func (c *Chat) Row(id string) (Row, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.useLocked() != nil {
+		return Row{}, false
+	}
+	if i, ok := c.byID[id]; ok {
+		return c.rows[i], true
+	}
+	if i, ok := c.pendingByID[id]; ok {
+		return c.pending[i].row, true
+	}
+	return Row{}, false
+}
+
 func (c *Chat) Has(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
