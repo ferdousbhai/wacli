@@ -54,7 +54,7 @@ so they work while the service is up and what you send lands in the archive.
 To run sync as a systemd user service:
 
 ```bash
-cp contrib/systemd/wacli-sync.service ~/.config/systemd/user/
+cp contrib/systemd/wacli-sync.service ~/.config/systemd/user/   # runs ~/.local/bin/wacli
 systemctl --user enable --now wacli-sync
 ```
 

@@ -4,7 +4,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-ExecStart=%h/go/bin/wacli sync --follow
+ExecStart=%h/.local/bin/wacli sync --follow
 Restart=on-failure
 RestartSec=30
 # Exit 3: unlinked from WhatsApp; restarting would not help. Run `wacli auth`.
