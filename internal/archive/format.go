@@ -214,7 +214,7 @@ func SplitDocLabel(body, file string) (text, label string) {
 		if name == "" {
 			return -1
 		}
-		for j := strings.LastIndex(body, name); j >= 0; j = strings.LastIndex(body[:j], name) {
+		for j := strings.LastIndex(body, name); j >= 0; j = strings.LastIndex(body[:j+len(name)-1], name) {
 			if j == 0 || body[j-1] == ' ' {
 				return j
 			}

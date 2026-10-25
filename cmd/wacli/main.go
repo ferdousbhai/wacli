@@ -125,6 +125,9 @@ func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
 	if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
 		return nil, fmt.Errorf("--date-format: %w", err)
 	}
+	if time.Unix(1, 0).UTC().Format(f.dateFormat) == time.Unix(0, 0).UTC().Format(f.dateFormat) {
+		return nil, fmt.Errorf("--date-format %q has no seconds; iPhone exports always show them", f.dateFormat)
+	}
 	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local, Logf: logf, ReadOnly: readOnly})
 }
 

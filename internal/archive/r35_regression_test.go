@@ -48,8 +48,8 @@ func TestDSTRealignLordHowe(t *testing.T) {
 func TestDSTRealignSydney(t *testing.T) {
 	r35realign(t, "Australia/Sydney", time.Date(2026, 4, 4, 16, 0, 0, 0, time.UTC), 3600, "")
 }
-func TestDSTRealignBerlinNoSec(t *testing.T) {
-	r35realign(t, "Europe/Berlin", time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC), 3600, "02.01.06, 15:04")
+func TestDSTRealignBerlinDotted(t *testing.T) {
+	r35realign(t, "Europe/Berlin", time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC), 3600, "02.01.06, 15:04:05")
 }
 func TestDSTRealignBerlin12h(t *testing.T) {
 	r35realign(t, "Europe/Berlin", time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC), 3600, "1/2/06, 3:04:05 PM")
