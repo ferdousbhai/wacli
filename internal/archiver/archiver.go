@@ -103,6 +103,9 @@ func (a *Archiver) Close() {
 	a.handling.Unlock()
 	a.cancel()
 	a.wg.Wait()
+	if err := a.ar.FlushAll(); err != nil {
+		a.logf("warning: %v", err)
+	}
 	a.media.flush()
 }
 
@@ -212,6 +215,7 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 			a.logf("warning: writing %s: %v", c.Name(), err)
 		}
 	}
+	a.media.flush() // downloads queued by this chunk, before it is acknowledged
 	if data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
 		// A waiting backfill reads the chat, so tell it only once written.
 		for chatID, page := range pages {
@@ -259,7 +263,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		return
 	case pm.Edited && c.Has(pm.ID):
 		text := a.names.mentions(ctx, pm.Text, pm.MentionedJIDs)
-		_, err := c.Update(pm.ID, func(e *archive.Entry, _ int) bool {
+		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
 			if e.Deleted != "" || (e.Text == text && e.Edited) {
 				return false
 			}
@@ -300,6 +304,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) {
 	if err == nil && b == nil {
 		err = c.Flush()
+		a.media.flush() // its download, if any, is queued on disk too
 	}
 	if err != nil {
 		a.logf("warning: archive write failed: %v", err)
@@ -424,7 +429,7 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 		return
 	}
 	var attachment string
-	_, err := c.Update(pm.ID, func(e *archive.Entry, _ int) bool {
+	_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
 		if e.Deleted != "" {
 			return false
 		}

@@ -45,28 +45,3 @@ type memKeyState struct {
 	mu sync.Mutex
 	m  map[string]bool
 }
-
-func newTestKeyStateStore(t *testing.T) *memKeyState {
-	t.Helper()
-	return &memKeyState{m: map[string]bool{}}
-}
-
-func (s *memKeyState) MarkAppStateKeyUnavailable(_ context.Context, account string, id []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[account+"|"+string(id)] = true
-	return nil
-}
-
-func (s *memKeyState) ClearAppStateKeyUnavailable(_ context.Context, account string, id []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, account+"|"+string(id))
-	return nil
-}
-
-func (s *memKeyState) IsAppStateKeyUnavailable(_ context.Context, account string, id []byte) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.m[account+"|"+string(id)], nil
-}

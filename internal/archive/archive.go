@@ -318,6 +318,7 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 		return "", err
 	}
 
+	c.mergeLocked()
 	changed := false
 	for i, raw := range c.entries {
 		for _, old := range []string{oldName, CleanName(oldName)} {
@@ -344,6 +345,9 @@ type Chat struct {
 	byID    map[string]int
 	hold    int  // >0 while a batch of writes is being collected
 	dirty   bool // memory has changes the files don't
+	// pending holds entries inserted during a Hold until they are merged.
+	pending     []pendingEntry
+	pendingByID map[string]int
 }
 
 func (c *Chat) JID() string { return c.info.JID }
@@ -456,16 +460,54 @@ func (c *Chat) reindex() {
 	}
 }
 
+// pendingEntry is a message inserted during a Hold, merged in at the end.
+type pendingEntry struct {
+	row  Row
+	text string
+}
+
+// mergeLocked merges the entries inserted during a Hold into place: one sort
+// and one pass, instead of shifting the whole chat for each older message.
+func (c *Chat) mergeLocked() {
+	if len(c.pending) == 0 {
+		return
+	}
+	sort.SliceStable(c.pending, func(i, j int) bool { return c.pending[i].row.TS < c.pending[j].row.TS })
+	rows := make([]Row, 0, len(c.rows)+len(c.pending))
+	entries := make([]string, 0, cap(rows))
+	i := 0
+	for _, p := range c.pending {
+		for ; i < len(c.rows) && c.rows[i].TS <= p.row.TS; i++ {
+			rows, entries = append(rows, c.rows[i]), append(entries, c.entries[i])
+		}
+		rows, entries = append(rows, p.row), append(entries, p.text)
+	}
+	c.rows, c.entries = append(rows, c.rows[i:]...), append(entries, c.entries[i:]...)
+	c.pending, c.pendingByID = nil, nil
+	c.reindex()
+}
+
+// lookupLocked finds an entry by message ID, among merged or pending ones.
+func (c *Chat) lookupLocked(id string) (text *string, ok bool) {
+	if i, ok := c.byID[id]; ok {
+		return &c.entries[i], true
+	}
+	if i, ok := c.pendingByID[id]; ok {
+		return &c.pending[i].text, true
+	}
+	return nil, false
+}
+
 func (c *Chat) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.rows)
+	return len(c.rows) + len(c.pending)
 }
 
 func (c *Chat) Has(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.byID[id]
+	_, ok := c.lookupLocked(id)
 	return ok
 }
 
@@ -473,22 +515,20 @@ func (c *Chat) Has(id string) bool {
 func (c *Chat) Rows() []Row {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.mergeLocked()
 	return append([]Row(nil), c.rows...)
 }
 
-// Get returns the parsed entry for a message ID and its position.
-func (c *Chat) Get(id string) (Entry, int, bool) {
+// Get returns the parsed entry for a message ID.
+func (c *Chat) Get(id string) (Entry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	i, ok := c.byID[id]
+	text, ok := c.lookupLocked(id)
 	if !ok {
-		return Entry{}, -1, false
+		return Entry{}, false
 	}
-	e, err := Parse(c.entries[i], c.a.opts.DateFormat, c.a.opts.Location)
-	if err != nil {
-		return Entry{}, -1, false
-	}
-	return e, i, true
+	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
+	return e, err == nil
 }
 
 // Hold collects writes in memory until the matching Release, so inserting
@@ -522,23 +562,32 @@ func (c *Chat) Flush() error {
 	return c.flushLocked()
 }
 
-// Insert adds a message in timestamp order. build receives the entry's
-// position (attachment names depend on it) and runs with the chat locked.
-// Inserting a known ID is a no-op that reports inserted=false.
+// Insert adds a message in timestamp order. build receives the position the
+// entry is expected at and runs with the chat locked. Inserting a known ID is
+// a no-op that reports inserted=false.
 func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted bool, err error) {
 	if c.a.opts.ReadOnly {
 		return 0, false, ErrReadOnly
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if i, ok := c.byID[row.ID]; ok {
-		return i, false, nil
+	if _, ok := c.lookupLocked(row.ID); ok {
+		return 0, false, nil
 	}
 	pos = sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS > row.TS })
 	e := build(pos)
-	e.Time = time.Unix(row.TS, 0).In(c.a.opts.Location)
+	e.Time, e.stamp = time.Unix(row.TS, 0).In(c.a.opts.Location), ""
 	text := Render(e, c.a.opts.DateFormat)
-	if pos == len(c.rows) && c.hold == 0 && !c.dirty {
+	switch {
+	case c.hold > 0:
+		if c.pendingByID == nil {
+			c.pendingByID = map[string]int{}
+		}
+		c.pendingByID[row.ID] = len(c.pending)
+		c.pending = append(c.pending, pendingEntry{row, text})
+		c.dirty = true
+		return pos, true, nil
+	case pos == len(c.rows) && !c.dirty:
 		return pos, true, c.appendLocked(row, text)
 	}
 	c.rows = append(c.rows[:pos], append([]Row{row}, c.rows[pos:]...)...)
@@ -566,25 +615,87 @@ func (c *Chat) appendLocked(row Row, text string) error {
 }
 
 // Update rewrites the entry for id. fn returns false to leave it unchanged.
-func (c *Chat) Update(id string, fn func(e *Entry, pos int) bool) (bool, error) {
+// The entry keeps its original timestamp text.
+func (c *Chat) Update(id string, fn func(e *Entry) bool) (bool, error) {
 	if c.a.opts.ReadOnly {
 		return false, ErrReadOnly
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	i, ok := c.byID[id]
+	changed, err := c.updateLocked(id, fn)
+	if err != nil || !changed {
+		return changed, err
+	}
+	return true, c.saveLocked()
+}
+
+func (c *Chat) updateLocked(id string, fn func(e *Entry) bool) (bool, error) {
+	text, ok := c.lookupLocked(id)
 	if !ok {
 		return false, nil
 	}
-	e, err := Parse(c.entries[i], c.a.opts.DateFormat, c.a.opts.Location)
+	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
 	if err != nil {
 		return false, err
 	}
-	if !fn(&e, i) {
+	if !fn(&e) {
 		return false, nil
 	}
-	c.entries[i] = Render(e, c.a.opts.DateFormat)
-	return true, c.saveLocked()
+	*text = Render(e, c.a.opts.DateFormat)
+	return true, nil
+}
+
+// PlaceAttachment moves a downloaded file into the chat folder as it is now
+// (a rename may have moved it since the download started), under want or a
+// free variant of it, and points the entry at it. The change is written by
+// the next Flush, so many finished downloads cost one write. If the entry
+// was deleted meanwhile the file goes to deletedDir; if it already has a
+// file (an import restored it) the download is dropped.
+func (c *Chat) PlaceAttachment(id, src, want, deletedDir string) (string, error) {
+	if c.a.opts.ReadOnly {
+		return "", ErrReadOnly
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	text, ok := c.lookupLocked(id)
+	if !ok {
+		return "", os.Remove(src)
+	}
+	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case e.Deleted != "":
+		if err := os.MkdirAll(deletedDir, 0o700); err != nil {
+			return "", err
+		}
+		return "", os.Rename(src, filepath.Join(deletedDir, filepath.Base(want)))
+	case e.Attachment != "":
+		return "", os.Remove(src)
+	}
+	dir := c.dirLocked()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	name := freeName(dir, filepath.Base(want))
+	if err := os.Rename(src, filepath.Join(dir, name)); err != nil {
+		return "", err
+	}
+	e.Omitted, e.Attachment = "", name
+	*text = Render(e, c.a.opts.DateFormat)
+	c.dirty = true
+	return name, nil
+}
+
+// freeName returns name, or name-2, name-3… if dir already has that file.
+func freeName(dir, name string) string {
+	ext := filepath.Ext(name)
+	dst := name
+	for i := 2; exists(filepath.Join(dir, dst)); i++ {
+		dst = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(name, ext), i, ext)
+	}
+	return dst
 }
 
 // RenameSenders rewrites the sender name of entries for which name returns a
@@ -595,6 +706,7 @@ func (c *Chat) RenameSenders(name func(row Row, sender string) (string, bool)) (
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.mergeLocked()
 	n := 0
 	for i, raw := range c.entries {
 		e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location)
@@ -625,15 +737,17 @@ func (c *Chat) saveLocked() error {
 // flushLocked rewrites both files from memory. On failure the chat stays
 // dirty, so the next write tries again with everything.
 func (c *Chat) flushLocked() error {
+	c.mergeLocked()
 	if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
 		return err
 	}
-	var b strings.Builder
-	for _, e := range c.entries {
-		b.WriteString(e)
-		b.WriteString(EntrySep)
-	}
-	if err := writeFileAtomic(c.chatPath(), []byte(b.String())); err != nil {
+	err := writeAtomic(c.chatPath(), func(w *bufio.Writer) {
+		for _, e := range c.entries {
+			w.WriteString(e)
+			w.WriteString(EntrySep)
+		}
+	})
+	if err != nil {
 		return err
 	}
 	if err := c.writeIndex(); err != nil {
@@ -644,11 +758,29 @@ func (c *Chat) flushLocked() error {
 }
 
 func (c *Chat) writeIndex() error {
-	var b strings.Builder
-	for _, r := range c.rows {
-		b.WriteString(formatRow(r))
+	return writeAtomic(c.indexPath(), func(w *bufio.Writer) {
+		for _, r := range c.rows {
+			w.WriteString(formatRow(r))
+		}
+	})
+}
+
+// FlushAll writes every chat with unwritten changes (a failed write leaves
+// them in memory); call it before exiting.
+func (a *Archive) FlushAll() error {
+	a.mu.Lock()
+	chats := make([]*Chat, 0, len(a.chats))
+	for _, c := range a.chats {
+		chats = append(chats, c)
 	}
-	return writeFileAtomic(c.indexPath(), []byte(b.String()))
+	a.mu.Unlock()
+	var first error
+	for _, c := range chats {
+		if err := c.Flush(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func formatRow(r Row) string {
@@ -703,21 +835,26 @@ func appendFile(path, s string) error {
 }
 
 func writeFileAtomic(path string, data []byte) error {
+	return writeAtomic(path, func(w *bufio.Writer) { w.Write(data) })
+}
+
+// writeAtomic writes a file through a temp file and a rename, so readers
+// never see it half written.
+func writeAtomic(path string, fill func(w *bufio.Writer)) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
+	w := bufio.NewWriterSize(tmp, 256*1024)
+	fill(w)
+	err = w.Flush()
+	if err == nil {
+		err = tmp.Sync()
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if err := tmp.Close(); err != nil {
+	if err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}

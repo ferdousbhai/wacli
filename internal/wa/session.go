@@ -56,14 +56,11 @@ func (c *Client) init() (err error) {
 	// original plaintext to re-encrypt when the retry arrives.
 	c.client.UseRetryMessageStore = true
 	cli := c.client
-	onEmptyKey := func(keyID []byte) {
-		cli.DangerousInternals().DispatchEvent(&AppStateKeyUnavailable{KeyID: keyID})
-	}
-	guardAppStateKeys(deviceStore, c.opts.KeyStateStore, onEmptyKey)
+	guardAppStateKeys(deviceStore)
 	cli.AddEventHandler(func(evt any) {
 		if _, ok := evt.(*events.PairSuccess); ok {
 			// Pairing's Device.Save replaced the stores.
-			guardAppStateKeys(cli.Store, c.opts.KeyStateStore, onEmptyKey)
+			guardAppStateKeys(cli.Store)
 		}
 	})
 	// Let whatsmeow own bounded primary-device retries and cancellation for

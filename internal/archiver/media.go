@@ -2,8 +2,10 @@ package archiver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,6 +51,9 @@ type mediaQueue struct {
 	wake    chan struct{}
 	retries map[string]chan *events.MediaRetry
 	dirty   bool
+	// placed holds downloads moved into their chat folder whose entry isn't
+	// on disk yet; settle writes those chats once and then dequeues them.
+	placed map[string][]string // chat JID → item keys
 }
 
 const mediaWorkers = 8
@@ -61,6 +66,7 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 		active:  map[string]bool{},
 		wake:    make(chan struct{}, 1),
 		retries: map[string]chan *events.MediaRetry{},
+		placed:  map[string][]string{},
 	}
 	data, err := os.ReadFile(q.path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -148,6 +154,7 @@ func (q *mediaQueue) writeLocked() {
 // run downloads queued media until ctx ends, saving the queue every couple of
 // seconds and once more on the way out.
 func (q *mediaQueue) run(ctx context.Context) {
+	_ = os.RemoveAll(q.tmpDir()) // partial downloads of an earlier run
 	var wg sync.WaitGroup
 	jobs := make(chan *pendingMedia)
 	for range mediaWorkers {
@@ -163,11 +170,12 @@ func (q *mediaQueue) run(ctx context.Context) {
 			}
 		}()
 	}
-	save := time.NewTicker(2 * time.Second)
+	save := time.NewTicker(time.Second)
 	defer save.Stop()
 	check := time.NewTicker(30 * time.Second)
 	defer check.Stop()
 	defer q.flush()
+	defer q.settle()
 	defer wg.Wait()
 	defer close(jobs)
 	for {
@@ -182,9 +190,41 @@ func (q *mediaQueue) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-save.C:
+			q.settle()
 			q.flush()
 		case <-q.wake:
 		case <-check.C:
+		}
+	}
+}
+
+func (q *mediaQueue) tmpDir() string { return filepath.Join(q.a.ar.Root(), ".wacli", "tmp") }
+
+// settle writes the chats that received files and only then takes those
+// files off the queue, so a crash can't leave an entry "omitted" with
+// nothing left to fetch it.
+func (q *mediaQueue) settle() {
+	q.mu.Lock()
+	placed := q.placed
+	q.placed = map[string][]string{}
+	q.mu.Unlock()
+	for jid, keys := range placed {
+		c, err := q.a.ar.Chat(jid)
+		if err == nil {
+			err = c.Flush()
+		}
+		q.mu.Lock()
+		if err != nil {
+			q.placed[jid] = append(q.placed[jid], keys...) // try again next time
+		} else {
+			for _, k := range keys {
+				delete(q.items, k)
+			}
+			q.saveLocked()
+		}
+		q.mu.Unlock()
+		if err != nil {
+			q.a.logf("warning: %v", err)
 		}
 	}
 }
@@ -237,7 +277,7 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 		q.forget(p.Chat, p.ID)
 		return
 	}
-	if e, _, ok := c.Get(p.ID); !ok || e.Attachment != "" || e.Deleted != "" {
+	if e, ok := c.Get(p.ID); !ok || e.Attachment != "" || e.Deleted != "" {
 		// Gone, deleted, or already restored by `wacli import`.
 		q.forget(p.Chat, p.ID)
 		return
@@ -247,40 +287,40 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 		q.dropUndownloadable(c, p)
 		return
 	}
-	target := filepath.Join(c.Dir(), p.Name)
+	// A stalled transfer must not hold a worker forever: allow two minutes
+	// plus time for the file at a slow 32 KB/s (and the phone's answer).
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute+time.Duration(p.Length/(32<<10))*time.Second)
+	defer cancel()
+	// Download outside the chat folder: a rename may move the folder
+	// meanwhile, and PlaceAttachment puts the file wherever it is then.
+	tmp := filepath.Join(q.tmpDir(), fmt.Sprintf("%x.part", sha256.Sum256([]byte(p.key()))))
 	if p.Direct == "" {
 		// No server copy to fetch; only the phone can upload it.
-		err = q.retryFromPhone(ctx, p, target)
-	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, "", target); err != nil && isExpired(err) {
-		err = q.retryFromPhone(ctx, p, target)
+		err = q.retryFromPhone(ctx, p, tmp)
+	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, "", tmp); err != nil && isExpired(err) {
+		err = q.retryFromPhone(ctx, p, tmp)
 	}
 	if err != nil {
-		if ctx.Err() != nil {
-			return // shutting down; it stays queued for next time
+		if q.a.ctx.Err() != nil || !q.a.wa.IsConnected() {
+			return // shutting down or offline: not the file's fault; stays queued
 		}
 		q.failed(p, err)
 		return
 	}
-	_, err = c.Update(p.ID, func(e *archive.Entry, _ int) bool {
-		if e.Deleted != "" {
-			return false
-		}
-		e.Omitted, e.Attachment = "", p.Name
-		return true
-	})
-	if err == nil {
-		err = c.Flush() // on disk before it leaves the queue
-	}
-	if err != nil {
-		q.a.logf("warning: %v", err)
+	deleted := filepath.Join(q.a.ar.Root(), ".wacli", "deleted", filepath.Base(c.Dir()))
+	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name, deleted); err != nil {
+		_ = os.Remove(tmp)
+		q.failed(p, err)
 		return
 	}
-	q.forget(p.Chat, p.ID)
+	q.mu.Lock()
+	q.placed[p.Chat] = append(q.placed[p.Chat], p.key())
+	q.mu.Unlock()
 	q.a.touch()
 }
 
 func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
-	_, err := c.Update(p.ID, func(e *archive.Entry, _ int) bool {
+	_, err := c.Update(p.ID, func(e *archive.Entry) bool {
 		if e.Omitted == "" {
 			return false
 		}

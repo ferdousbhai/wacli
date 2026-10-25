@@ -19,8 +19,6 @@ import (
 
 type Options struct {
 	StorePath string
-	// The application owns durable, account-scoped key recovery metadata.
-	KeyStateStore AppStateKeyStateStore
 }
 
 type Client struct {
@@ -113,15 +111,10 @@ func (c *Client) IsConnected() bool {
 type HistorySyncLimits struct {
 	// Days of history to ask for, 0 to leave it to the primary.
 	Days uint32
-	// MaxPerChat caps how many messages each chat brings, 0 for no cap.
-	MaxPerChat uint32
 	// Full asks for a full history sync instead of the recent window. With
 	// Days set it bounds only the full sync: the recent window the primary
 	// sends first keeps its default.
 	Full bool
-	// SizeMB is how many megabytes the primary may put into the full sync,
-	// 0 to leave it to the primary.
-	SizeMB uint32
 }
 
 // SetHistorySyncLimits applies the limits to the device properties whatsmeow
@@ -141,29 +134,16 @@ func SetHistorySyncLimits(limits HistorySyncLimits) {
 			cfg.RecentSyncDaysLimit = proto.Uint32(limits.Days)
 		}
 	}
-	if limits.MaxPerChat > 0 {
-		cfg.InitialSyncMaxMessagesPerChat = proto.Uint32(limits.MaxPerChat)
-	}
-	if limits.SizeMB > 0 {
-		cfg.FullSyncSizeMbLimit = proto.Uint32(limits.SizeMB)
-	}
 }
 
 type ConnectOptions struct {
 	AllowQR         bool
-	OnQRCode        func(code string)
 	PairPhoneNumber string
 	OnPairCode      func(code string)
-	// SuppressInitialAvailablePresence skips the post-connect available
-	// presence update for callers that need a quiet linked-device session.
-	// The default false preserves normal WhatsApp linked-device behavior.
-	SuppressInitialAvailablePresence bool
 	// DetachSocket, when true, connects the websocket with a detached
-	// context so it is not closed when the caller's context is cancelled.
-	// This allows graceful shutdown to send a final PresenceUnavailable
-	// stanza before the client is disconnected. Only sync uses this;
-	// other commands keep the default (false) so --timeout and signal
-	// cancellation still bound the connection.
+	// context so it is not closed when the caller's context is cancelled,
+	// leaving shutdown to Disconnect. `sync --follow` uses this; other
+	// commands keep the default so Ctrl+C also ends the connection.
 	DetachSocket bool
 }
 
@@ -197,8 +177,8 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 	// has a 30-second dial timeout. The dial is bounded so a hanging connect
 	// cannot outlive SIGTERM indefinitely; after the dial succeeds the timer
 	// is stopped so the websocket stays open until Disconnect()/Close().
-	// Other commands keep the caller's context so --timeout and signal
-	// cancellation still bound the connection.
+	// Other commands keep the caller's context, so Ctrl+C ends the
+	// connection too.
 	connCtx := ctx
 	var dialCancel context.CancelFunc
 	var dialTimer *time.Timer
@@ -206,7 +186,7 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 	if opts.DetachSocket {
 		// Use a detached context so the websocket survives signal
 		// cancellation, but also cancel the dial if the caller's
-		// context fires (--max-reconnect, SIGTERM) so an in-flight
+		// context fires (SIGTERM) so an in-flight
 		// connect cannot outlive caller cancellation.
 		connCtx, dialCancel = context.WithCancel(context.Background())
 		dialTimer = time.AfterFunc(30*time.Second, dialCancel)
@@ -234,9 +214,6 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 	}
 
 	if authed {
-		if opts.SuppressInitialAvailablePresence {
-			return nil
-		}
 		sendInitialAvailablePresence(ctx, cli)
 		return nil
 	}
@@ -265,8 +242,6 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 					if opts.OnPairCode != nil {
 						opts.OnPairCode(code)
 					}
-				} else if opts.OnQRCode != nil {
-					opts.OnQRCode(evt.Code)
 				} else {
 					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.M, os.Stdout)
 				}

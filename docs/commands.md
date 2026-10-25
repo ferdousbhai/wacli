@@ -37,13 +37,14 @@ this computer, it exits with status 3 so the service stops restarting.
 ## backfill
 
 ```bash
-wacli backfill --chat <name|number|JID> | --all [--count 50] [--wait 1m]
+wacli backfill --chat <name|number|JID> | --all [--count 50] [--requests 1000] [--wait 1m]
 ```
 
 Asks the phone for older history, page by page, starting from the newest
 message and following the phone's own order, so gaps in the middle of a chat
 are filled too. Progress is saved per chat, and a chat is marked complete when
-the phone has nothing more. The phone must be online. Phones don't hand linked
+the phone has nothing more (or after `--requests` pages). The phone must be
+online. Phones don't hand linked
 devices everything; for the rest, use `import`.
 
 ## import

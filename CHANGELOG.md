@@ -7,5 +7,3 @@
 - `backfill` walks history in the phone's page order, fixing chats where an out-of-order system message hid older messages.
 - New `import` merges a phone export into the archive.
 - `send`, `backfill` and `import` run inside a running `sync --follow`.
-
-Started from openclaw/wacli 0.25.0 (MIT); earlier history is in git.

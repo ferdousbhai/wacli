@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +64,7 @@ func TestInsertPositionFeedsAttachmentName(t *testing.T) {
 	if err != nil || pos != 1 {
 		t.Fatalf("pos=%d err=%v", pos, err)
 	}
-	e, _, ok := c.Get("y")
+	e, ok := c.Get("y")
 	if !ok || e.Attachment != "00000001-PHOTO-1970-01-01-00-00-20.jpg" {
 		t.Errorf("entry = %+v", e)
 	}
@@ -74,8 +75,8 @@ func TestUpdateEditsAndDeletes(t *testing.T) {
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
 	c.Insert(Row{ID: "a", TS: 1}, text("thanks"))
 	c.Insert(Row{ID: "b", TS: 2}, text("oops"))
-	c.Update("a", func(e *Entry, _ int) bool { e.Text, e.Edited = "Thank you", true; return true })
-	c.Update("b", func(e *Entry, _ int) bool { e.Text, e.Deleted = "", DeletedByThem; return true })
+	c.Update("a", func(e *Entry) bool { e.Text, e.Edited = "Thank you", true; return true })
+	c.Update("b", func(e *Entry) bool { e.Text, e.Deleted = "", DeletedByThem; return true })
 	want := "[1970-01-01, 00:00:01] Dana: Thank you ‎<This message was edited>\r\n" +
 		"[1970-01-01, 00:00:02] Dana: ‎This message was deleted.\r\n"
 	if got := chatText(t, c); got != want {
@@ -263,7 +264,7 @@ func TestLoadRepairsMisalignedIndex(t *testing.T) {
 	}
 	// It keeps working: appends land and edits find their entry.
 	c2.Insert(Row{ID: "E", TS: 500}, text("E"))
-	if ok, _ := c2.Update("C", func(e *Entry, _ int) bool { e.Text = "C2"; return true }); !ok {
+	if ok, _ := c2.Update("C", func(e *Entry) bool { e.Text = "C2"; return true }); !ok {
 		t.Error("edit after repair failed")
 	}
 }
@@ -390,14 +391,20 @@ func TestMergeKeepsIdenticalLines(t *testing.T) {
 	}
 }
 
-func TestMergeMissingFileLeavesItOmitted(t *testing.T) {
+func TestMergeMissingFileLeavesItOmittedAndContinues(t *testing.T) {
 	a := openTest(t)
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
-	in := []Entry{{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Attachment: "00000001-PHOTO-1970-01-01-00-00-05.jpg"}}
-	if _, err := c.Merge(in, t.TempDir()); err == nil {
-		t.Fatal("expected missing-file error")
+	in := []Entry{
+		{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Attachment: "00000001-PHOTO-1970-01-01-00-00-05.jpg"},
+		{Time: time.Unix(6, 0).UTC(), Sender: "Dana", Text: "after"},
 	}
-	if got := chatText(t, c); got != "‎[1970-01-01, 00:00:05] Dana: ‎image omitted\r\n" {
+	for range 2 { // and again: the second run must not get stuck either
+		if _, err := c.Merge(in, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "\u200e[1970-01-01, 00:00:05] Dana: \u200eimage omitted\r\n[1970-01-01, 00:00:06] Dana: after\r\n"
+	if got := chatText(t, c); got != want {
 		t.Errorf("got %q", got)
 	}
 }
@@ -409,5 +416,83 @@ func TestRenameGroupWithColonInName(t *testing.T) {
 	a.Rename("g@g.us", "Ops", "")
 	if got := chatText(t, c); got != "[1970-01-01, 00:00:01] Ops: ‎You were added\r\n" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestHeldInsertsAreMergedOnceInOrder(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "new", TS: 1_000_000}, text("newest"))
+	start := time.Now()
+	c.Hold()
+	for i := 20000; i > 0; i-- { // older history, newest first
+		c.Insert(Row{ID: fmt.Sprint(i), TS: int64(i)}, text(fmt.Sprint(i)))
+	}
+	if !c.Has("777") || c.Len() != 20001 {
+		t.Fatal("held entries not visible")
+	}
+	if err := c.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("20k held inserts took %v", d)
+	}
+	rows := c.Rows()
+	if rows[0].ID != "1" || rows[19999].ID != "20000" || rows[20000].ID != "new" {
+		t.Errorf("order: %v %v %v", rows[0], rows[19999], rows[20000])
+	}
+	if strings.Count(chatText(t, c), "\r\n") != 20001 {
+		t.Error("file not written")
+	}
+}
+
+func TestRewriteKeepsTimestampText(t *testing.T) {
+	// 02:30 on 2025-03-09 doesn't exist in New York (clocks jump to 03:00).
+	ny, _ := time.LoadLocation("America/New_York")
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "WhatsApp Chat - Dana"), 0o700)
+	os.MkdirAll(filepath.Join(root, ".wacli", "index"), 0o700)
+	os.WriteFile(filepath.Join(root, ".wacli", "chats.json"), []byte(`{"1@s.whatsapp.net":{"folder":"WhatsApp Chat - Dana","name":"Dana","kind":"dm"}}`), 0o600)
+	os.WriteFile(filepath.Join(root, "WhatsApp Chat - Dana", ChatFile), []byte("[2025-03-09, 02:30:00] Dana: hi\r\n"), 0o600)
+	os.WriteFile(filepath.Join(root, ".wacli", "index", "1@s.whatsapp.net.tsv"), []byte("A\t1741505400\t0\t\n"), 0o600)
+	a, _ := Open(Options{Root: root, Location: ny})
+	c, _ := a.Chat("1@s.whatsapp.net")
+	c.Update("A", func(e *Entry) bool { e.Edited = true; return true })
+	if got := chatText(t, c); got != "[2025-03-09, 02:30:00] Dana: hi \u200e<This message was edited>\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestPlaceAttachmentUsesFreeNameCurrentFolderAndDeletion(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "+1", "dm", "")
+	for _, id := range []string{"A", "B", "D"} {
+		c.Insert(Row{ID: id, TS: 1}, func(int) Entry { return Entry{Sender: "Dana", Omitted: "document omitted"} })
+	}
+	a.Rename("1@s.whatsapp.net", "Dana", "") // renamed while downloading
+	tmp := t.TempDir()
+	put := func(id string) (string, error) {
+		src := filepath.Join(tmp, id)
+		os.WriteFile(src, []byte(id), 0o600)
+		return c.PlaceAttachment(id, src, "00000000-invoice.pdf", filepath.Join(tmp, "deleted"))
+	}
+	n1, _ := put("A")
+	n2, _ := put("B")
+	if n1 != "00000000-invoice.pdf" || n2 != "00000000-invoice-2.pdf" {
+		t.Errorf("names %q %q", n1, n2)
+	}
+	if got, _ := os.ReadFile(filepath.Join(a.Root(), "WhatsApp Chat - Dana", n1)); string(got) != "A" {
+		t.Error("first file overwritten or misplaced")
+	}
+	c.Update("D", func(e *Entry) bool { e.Deleted = DeletedByThem; return true })
+	if n, _ := put("D"); n != "" {
+		t.Error("deleted entry got a file")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "deleted", "00000000-invoice.pdf")); err != nil {
+		t.Error("deleted message's file not set aside")
+	}
+	c.Flush()
+	if !strings.Contains(chatText(t, c), "<attached: 00000000-invoice-2.pdf>") {
+		t.Error("entry not updated")
 	}
 }

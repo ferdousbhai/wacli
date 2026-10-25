@@ -1,6 +1,7 @@
 package wa
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -150,4 +151,11 @@ func TestDownloadDirectBytesAllowsSlowBodyAfterHeaders(t *testing.T) {
 		t.Fatalf("downloadDirectBytes elapsed = %s, want slow body delay to be observed", elapsed)
 	}
 	t.Logf("direct media behavior: headers arrived before the 50ms ResponseHeaderTimeout, then slow body completed in %s and returned %d bytes", elapsed, len(got))
+}
+
+// downloadDirectBytes collects downloadDirect into memory for these tests.
+func downloadDirectBytes(ctx context.Context, mediaURL string) ([]byte, error) {
+	var b bytes.Buffer
+	_, err := downloadDirect(ctx, mediaURL, &b)
+	return b.Bytes(), err
 }

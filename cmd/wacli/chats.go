@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/ferdousbhai/wacli/internal/sqliteutil"
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/ferdousbhai/wacli/internal/archiver"
 	"github.com/ferdousbhai/wacli/internal/lock"
@@ -169,10 +173,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			info["chats_history_complete"] = complete
 			if !running {
-				if c, err := wa.New(wa.Options{StorePath: filepath.Join(f.storeDir, "session.db")}); err == nil {
-					info["linked"] = c.IsAuthed()
-					c.Close()
-				}
+				info["linked"] = isLinked(filepath.Join(f.storeDir, "session.db"))
 			}
 			var problems []string
 			if st, err := archiver.ReadStatus(ar.Root()); err == nil {
@@ -230,6 +231,21 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "also read every chat and verify its files (changes nothing)")
 	return cmd
+}
+
+// isLinked reads the session store without changing it: opening it through
+// whatsmeow would create or migrate it, and doctor must only look.
+func isLinked(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	db, err := sql.Open("sqlite3", sqliteutil.FileURI(path, "mode=ro"))
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var n int
+	return db.QueryRow("SELECT COUNT(*) FROM whatsmeow_device").Scan(&n) == nil && n > 0
 }
 
 func newLogoutCmd(f *rootFlags) *cobra.Command {

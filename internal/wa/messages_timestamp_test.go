@@ -10,9 +10,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// The parsed timestamp is marshalled straight into webhook payloads, so its
-// location decides the wire format. whatsmeow hands the event time over in the
-// host's zone, which would make one message serialize differently per machine.
+// whatsmeow hands the event time over in the host's zone; parsing normalizes it
+// so live and history messages agree.
 func TestParseLiveMessageNormalizesTimestampToUTC(t *testing.T) {
 	zone := time.FixedZone("test-0400", -4*60*60)
 	local := time.Date(2026, 9, 4, 14, 57, 52, 0, zone)

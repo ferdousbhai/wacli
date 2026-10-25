@@ -44,6 +44,11 @@ type Entry struct {
 
 	Edited  bool
 	Deleted string // DeletedByThem or DeletedByMe
+
+	// stamp is the timestamp text as read from the file. Rewriting an entry
+	// keeps it, so a time that doesn't exist in today's zone (a DST gap) or
+	// was written in another zone isn't shifted.
+	stamp string
 }
 
 // Render formats e as it appears in _chat.txt, without the trailing EntrySep.
@@ -58,7 +63,11 @@ func Render(e Entry, dateFormat string) string {
 		b.WriteString(lrm)
 	}
 	b.WriteString("[")
-	b.WriteString(e.Time.Format(dateFormat))
+	if e.stamp != "" {
+		b.WriteString(e.stamp)
+	} else {
+		b.WriteString(e.Time.Format(dateFormat))
+	}
 	b.WriteString("] ")
 	b.WriteString(e.Sender)
 	b.WriteString(":")
@@ -115,7 +124,7 @@ func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	e := Entry{Time: ts, Sender: raw[m[4]:m[5]]}
+	e := Entry{Time: ts, Sender: raw[m[4]:m[5]], stamp: raw[m[2]:m[3]]}
 	body := raw[m[1]:]
 
 	if rest, ok := strings.CutSuffix(body, " "+editedMarker); ok {

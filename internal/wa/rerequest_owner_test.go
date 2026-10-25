@@ -66,7 +66,7 @@ func (l *phoneRequestLog) Debugf(format string, args ...any) {
 
 func newPhoneRequestClient(t *testing.T) (*Client, *phoneRequestLog, <-chan *events.UndecryptableMessage) {
 	t.Helper()
-	c, err := New(Options{StorePath: newPairedSessionStore(t), KeyStateStore: newTestKeyStateStore(t)})
+	c, err := New(Options{StorePath: newPairedSessionStore(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

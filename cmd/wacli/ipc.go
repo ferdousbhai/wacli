@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/ferdousbhai/wacli/internal/delegate"
@@ -112,16 +113,29 @@ func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen for send requests: %w", err)
 	}
+	var wg sync.WaitGroup
+	accepting := make(chan struct{})
 	go func() {
+		defer close(accepting)
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go handleConn(ctx, s, conn)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				handleConn(ctx, s, conn)
+			}()
 		}
 	}()
-	return func() { ln.Close() }, nil
+	// stop lets requests in flight finish (they end with ctx) before the
+	// session shuts down, so an import isn't cut off halfway.
+	return func() {
+		ln.Close()
+		<-accepting
+		wg.Wait()
+	}, nil
 }
 
 func handleConn(ctx context.Context, s *session, conn net.Conn) {

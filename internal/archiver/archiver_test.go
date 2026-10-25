@@ -199,7 +199,7 @@ func TestMediaEntryWaitsForDownload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(c.Dir(), name), []byte("jpg"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c.Update("M2", func(e *archive.Entry, _ int) bool { e.Omitted, e.Attachment = "", name; return true })
+	c.Update("M2", func(e *archive.Entry) bool { e.Omitted, e.Attachment = "", name; return true })
 	got = chatFile(t, ar, group)
 	if !strings.HasSuffix(got, "‎[2025-10-24, 04:40:33] Alex: 🙏 ‎<attached: "+name+">\r\n") {
 		t.Errorf("after download: %q", got)
@@ -420,4 +420,30 @@ func mustJID(s string) types.JID {
 		panic(err)
 	}
 	return j
+}
+
+func TestFinishedDownloadLeavesQueueOnlyOnceWritten(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+		DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32), FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32),
+	}}
+	a.handle(live(group, dana, "M1", false, t0, img))
+	c, _ := ar.Chat(group)
+	var p *pendingMedia
+	for _, it := range a.media.items {
+		p = it
+	}
+	src := filepath.Join(t.TempDir(), "dl")
+	os.WriteFile(src, []byte("jpg"), 0o600)
+	if _, err := c.PlaceAttachment(p.ID, src, p.Name, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	a.media.placed[p.Chat] = []string{p.key()}
+	if strings.Contains(chatFile(t, ar, group), "<attached:") {
+		t.Fatal("written before settle; expected one write per batch")
+	}
+	a.media.settle()
+	if !strings.Contains(chatFile(t, ar, group), "<attached: "+p.Name+">") || a.PendingMedia() != 0 {
+		t.Errorf("after settle: pending=%d file=%q", a.PendingMedia(), chatFile(t, ar, group))
+	}
 }

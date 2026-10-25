@@ -2,6 +2,7 @@ package archiver
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,7 +23,13 @@ func (a *Archiver) nameChanged() {
 // before chats were flagged) and then whenever WhatsApp sends names, after a
 // quiet moment so a burst of contact updates leads to one pass.
 func (a *Archiver) refreshNamesLoop(ctx context.Context) {
-	a.RefreshNames(ctx, true)
+	// Archives written before chats were flagged get one full pass.
+	scanned := filepath.Join(a.ar.Root(), ".wacli", "names-scanned")
+	_, err := os.Stat(scanned)
+	a.RefreshNames(ctx, err != nil)
+	if err != nil && ctx.Err() == nil {
+		_ = os.WriteFile(scanned, nil, 0o600)
+	}
 	for {
 		select {
 		case <-ctx.Done():

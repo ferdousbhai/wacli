@@ -73,32 +73,25 @@ type PollAddOptionRef struct {
 }
 
 type ParsedMessage struct {
-	Chat             types.JID
-	ID               string
-	SenderJID        string
-	Timestamp        time.Time
-	FromMe           bool
-	Text             string
-	Buttons          []Button
-	Media            *Media
-	Location         *Location
-	Poll             *Poll
-	PollVote         *PollVoteRef
-	PollAdd          *PollAddOptionRef
-	PushName         string
-	ReplyToID        string
-	ReplyToSenderJID string
-	ReplyToDisplay   string
-	MentionedJIDs    []string
-	ReactionToID     string
-	ReactionEmoji    string
-	IsForwarded      bool
-	ForwardingScore  uint32
-	StarredKnown     bool
-	Starred          bool
-	Edited           bool
-	Revoked          bool
-	Call             *ParsedCallEvent
+	Chat          types.JID
+	ID            string
+	SenderJID     string
+	Timestamp     time.Time
+	FromMe        bool
+	Text          string
+	Buttons       []Button
+	Media         *Media
+	Location      *Location
+	Poll          *Poll
+	PollVote      *PollVoteRef
+	PollAdd       *PollAddOptionRef
+	PushName      string
+	MentionedJIDs []string
+	ReactionToID  string
+	ReactionEmoji string
+	Edited        bool
+	Revoked       bool
+	Call          *ParsedCallEvent
 	// UnhandledPayload names the populated waE2E.Message field when parsing
 	// extracted no content at all. Empty when the message was understood.
 	UnhandledPayload string
@@ -108,9 +101,8 @@ func ParseLiveMessage(evt *events.Message) ParsedMessage {
 	msg := ParsedMessage{
 		Chat: evt.Info.Chat,
 		ID:   evt.Info.ID,
-		// UTC, matching ParseHistoryMessage: this value is marshalled straight
-		// into webhook payloads, where the host's zone would otherwise decide
-		// the wire format. The instant is unchanged.
+		// UTC, matching ParseHistoryMessage, so parsed messages don't depend
+		// on the zone whatsmeow happened to use. The instant is unchanged.
 		Timestamp: evt.Info.Timestamp.UTC(),
 		FromMe:    evt.Info.IsFromMe,
 		PushName:  evt.Info.PushName,
@@ -138,10 +130,6 @@ func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo) ParsedMes
 		Timestamp: time.Unix(int64(hist.GetMessageTimestamp()), 0).UTC(),
 		FromMe:    hist.GetKey().GetFromMe(),
 	}
-	if hist.Starred != nil {
-		pm.StarredKnown = true
-		pm.Starred = hist.GetStarred()
-	}
 
 	sender := strings.TrimSpace(hist.GetParticipant())
 	if sender == "" {
@@ -158,9 +146,8 @@ func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo) ParsedMes
 	return pm
 }
 
-// HasContent reports whether parsing produced anything storable. A message with
-// no content is persisted with a "(message)" placeholder, which is
-// indistinguishable from a message that genuinely carried nothing.
+// HasContent reports whether parsing produced anything to archive. A message
+// without content becomes an empty entry, like a message type iOS can't show.
 func (pm ParsedMessage) HasContent() bool {
 	return strings.TrimSpace(pm.Text) != "" ||
 		pm.Media != nil ||
@@ -176,7 +163,7 @@ func (pm ParsedMessage) HasContent() bool {
 }
 
 // markUnhandledPayload records which payload field was present when extraction
-// yielded nothing, so the placeholder row can be diagnosed instead of silently
+// yielded nothing, so an empty entry can be diagnosed instead of silently
 // discarding content. Field names come from the protobuf descriptor, so new
 // WhatsApp message types are reported without needing a code change here.
 func markUnhandledPayload(m *waProto.Message, pm *ParsedMessage) {
@@ -230,20 +217,7 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) *waProto.Message {
 		return extractWAProto(inner, pm)
 	}
 	if comment := m.GetCommentMessage(); comment.GetMessage() != nil {
-		leaf := extractWAProto(comment.GetMessage(), pm)
-		if target := comment.GetTargetMessageKey(); strings.TrimSpace(target.GetID()) != "" {
-			id := strings.TrimSpace(target.GetID())
-			if pm.ReplyToID != id {
-				// Inner quoted content describes a different target.
-				pm.ReplyToSenderJID = ""
-				pm.ReplyToDisplay = ""
-			}
-			pm.ReplyToID = id
-			if sender := strings.TrimSpace(target.GetParticipant()); sender != "" {
-				pm.ReplyToSenderJID = sender
-			}
-		}
-		return leaf
+		return extractWAProto(comment.GetMessage(), pm)
 	}
 	extractReaction(m, pm)
 	extractPlainText(m, pm)
@@ -258,18 +232,7 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) *waProto.Message {
 	extractAlbum(m, pm)
 
 	if ctx := contextInfoForMessage(m); ctx != nil {
-		if id := strings.TrimSpace(ctx.GetStanzaID()); id != "" {
-			pm.ReplyToID = id
-		}
-		if sender := strings.TrimSpace(ctx.GetParticipant()); sender != "" {
-			pm.ReplyToSenderJID = sender
-		}
-		if quoted := ctx.GetQuotedMessage(); quoted != nil {
-			pm.ReplyToDisplay = strings.TrimSpace(displayTextForProto(quoted))
-		}
 		pm.MentionedJIDs = append([]string(nil), ctx.GetMentionedJID()...)
-		pm.ForwardingScore = ctx.GetForwardingScore()
-		pm.IsForwarded = ctx.GetIsForwarded() || pm.ForwardingScore > 0
 	}
 	return m
 }
