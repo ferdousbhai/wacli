@@ -502,3 +502,13 @@ func TestSentFileGoesStraightIntoTheFolder(t *testing.T) {
 		t.Errorf("file %q %v", b, err)
 	}
 }
+
+func TestReservedDownloadIsNotHandedOut(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	a.media.reserve(group, "S1") // a sent file is about to be placed
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32)}}
+	a.handle(live(group, me, "S1", true, t0, img))
+	if got := a.media.take(time.Now()); len(got) != 0 {
+		t.Errorf("worker would download our own upload: %v", got)
+	}
+}

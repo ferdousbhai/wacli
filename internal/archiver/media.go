@@ -373,11 +373,28 @@ func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
 	q.forget(p.Chat, p.ID)
 }
 
+// reserve keeps workers away from a download that is about to be satisfied
+// from local bytes (placeOwn releases it).
+func (q *mediaQueue) reserve(chat, id string) {
+	q.mu.Lock()
+	q.active[chat+"|"+id] = true
+	q.mu.Unlock()
+}
+
 // placeOwn puts a file this device sent into its chat folder, in place of
 // the download its entry queued, and writes the entry.
-func (q *mediaQueue) placeOwn(chat, id string, data []byte) error {
+func (q *mediaQueue) placeOwn(chat, id string, data []byte) (err error) {
+	key := chat + "|" + id
+	defer func() {
+		q.mu.Lock()
+		delete(q.active, key) // reserved by reserve
+		q.mu.Unlock()
+		if err != nil {
+			q.poke() // fall back to downloading it
+		}
+	}()
 	q.mu.Lock()
-	p, ok := q.items[chat+"|"+id]
+	p, ok := q.items[key]
 	q.mu.Unlock()
 	if !ok {
 		return nil // not a downloadable attachment

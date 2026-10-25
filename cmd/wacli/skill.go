@@ -51,6 +51,9 @@ func (p skillPaths) state() skillState {
 	}
 	marker, err := os.ReadFile(filepath.Join(p.dir, skillMarker))
 	if err != nil {
+		if p.onlyTempFiles() {
+			return skillMissing // a first install that crashed before claiming
+		}
 		return skillUnmanaged
 	}
 	var rev int
@@ -118,10 +121,33 @@ func (p skillPaths) writeFiles() error {
 	return write(skillMarker, []byte(fmt.Sprintf("revision %d\n", skills.Revision)))
 }
 
+// onlyTempFiles reports whether the skill folder holds nothing but files a
+// crashed write of wacli's left behind.
+func (p skillPaths) onlyTempFiles() bool {
+	entries, err := os.ReadDir(p.dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		ok := false
+		for _, pat := range skillTempPatterns {
+			if m, _ := filepath.Match(pat, e.Name()); m {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+var skillTempPatterns = []string{".SKILL.md.*", "." + skillMarker + ".*"}
+
 // removeTempFiles removes what a crash mid-write left in the skill folder
 // (WriteAtomic's ".<name>.*" temp files there).
 func (p skillPaths) removeTempFiles() {
-	for _, pat := range []string{".SKILL.md.*", "." + skillMarker + ".*"} {
+	for _, pat := range skillTempPatterns {
 		matches, _ := filepath.Glob(filepath.Join(p.dir, pat))
 		for _, m := range matches {
 			os.Remove(m)

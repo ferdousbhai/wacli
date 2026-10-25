@@ -548,9 +548,13 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		},
 		Message: msg,
 	}
+	chat := a.canonical(ctx, to).String()
+	if data != nil {
+		a.media.reserve(chat, string(id)) // no worker downloads our own upload
+	}
 	a.archiveMessage(ctx, nil, wa.ParseLiveMessage(evt), "")
 	if data != nil {
-		if err := a.media.placeOwn(a.canonical(ctx, to).String(), string(id), data); err != nil {
+		if err := a.media.placeOwn(chat, string(id), data); err != nil {
 			a.logf("warning: archiving the sent file (it will be downloaded instead): %v", err)
 		}
 	}

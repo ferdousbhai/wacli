@@ -777,3 +777,23 @@ func TestCrashBetweenIndexAndChatWriteDoesNotDuplicate(t *testing.T) {
 		t.Errorf("c at %d", c2.Position("c"))
 	}
 }
+
+func TestRealignAfterCrashInLargeBatch(t *testing.T) {
+	// A held batch of 100 older messages: index written, _chat.txt not.
+	var rows []Row
+	for i := range 100 {
+		rows = append(rows, Row{ID: fmt.Sprintf("hist%d", i), TS: int64(1000 + i)})
+	}
+	var entries []string
+	for i := range 5 {
+		ts := int64(100000 + i*60)
+		rows = append(rows, Row{ID: fmt.Sprintf("old%d", i), TS: ts})
+		entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).UTC(), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+	}
+	got := realign(entries, rows, DefaultDateFormat, time.UTC)
+	for i, r := range got {
+		if r.ID != fmt.Sprintf("old%d", i) {
+			t.Errorf("entry %d got %s", i, r.ID)
+		}
+	}
+}

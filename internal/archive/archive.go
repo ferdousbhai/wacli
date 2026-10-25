@@ -544,7 +544,11 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 		lastTS = ts
 		match := -1
 		end := min(len(rows), next+64)
-		for k := next; k < end && match < 0; k++ { // the same instant
+		// The same instant. Rows written without their entries (a crash
+		// between the index and _chat.txt) can come in a run as long as a
+		// whole history batch, so this search reaches past all of them.
+		wide := min(len(rows), end+max(0, len(rows)-len(entries)))
+		for k := next; k < wide && match < 0; k++ {
 			if rows[k].TS == ts {
 				match = k
 			}

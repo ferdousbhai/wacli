@@ -125,3 +125,15 @@ func TestCrashDuringFirstInstallIsFinishedLater(t *testing.T) {
 		t.Errorf("state %s err %v", p.state(), err)
 	}
 }
+
+func TestCrashBeforeClaimingReadsAsMissing(t *testing.T) {
+	p, _ := testSkillPaths(t)
+	os.MkdirAll(p.dir, 0o755)
+	os.WriteFile(filepath.Join(p.dir, "."+skillMarker+".123"), nil, 0o644)
+	if p.state() != skillMissing {
+		t.Fatalf("state %s", p.state())
+	}
+	if _, err := p.install(false); err != nil || p.state() != skillCurrent {
+		t.Errorf("state %s err %v", p.state(), err)
+	}
+}
