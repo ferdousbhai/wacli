@@ -629,3 +629,10 @@ func TestDeviceSentWrapperFromSomeoneElseIsIgnored(t *testing.T) {
 		t.Fatalf("FromMe=%v Chat=%s", pm.FromMe, pm.Chat)
 	}
 }
+
+func TestContactCardWithoutNameHasContent(t *testing.T) {
+	pm := ParseLiveMessage(liveEvent(&waProto.Message{ContactMessage: &waProto.ContactMessage{Vcard: proto.String("BEGIN:VCARD\nEMAIL:a@example.com\nEND:VCARD")}}))
+	if !pm.HasContent() || pm.UnhandledPayload != "" {
+		t.Errorf("content %v, unhandled %q", pm.HasContent(), pm.UnhandledPayload)
+	}
+}

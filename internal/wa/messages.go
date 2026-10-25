@@ -126,6 +126,7 @@ func (pm ParsedMessage) HasContent() bool {
 		pm.IsPollVote ||
 		pm.IsPollAdd ||
 		pm.IsAlbum ||
+		pm.VCard != nil ||
 		pm.Call != nil ||
 		pm.Location != nil ||
 		pm.Revoked ||
