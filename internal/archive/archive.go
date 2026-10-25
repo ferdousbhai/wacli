@@ -1046,13 +1046,21 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 // referencedLocked reports whether any entry has name as its attachment.
 func (c *Chat) referencedLocked(name string) bool {
 	tag := attachOpen + name + ">"
+	// Only a media line owns a file; a text may quote the tag.
+	owns := func(raw string) bool {
+		if !strings.HasPrefix(raw, lrm) || !strings.Contains(raw, tag) {
+			return false
+		}
+		e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location)
+		return err == nil && e.Attachment == name
+	}
 	for _, e := range c.entries {
-		if strings.Contains(e, tag) {
+		if owns(e) {
 			return true
 		}
 	}
 	for _, p := range c.pending {
-		if strings.Contains(p.text, tag) {
+		if owns(p.text) {
 			return true
 		}
 	}

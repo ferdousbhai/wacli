@@ -55,3 +55,22 @@ func TestIndexKeepsIDsWithControlCharacters(t *testing.T) {
 		t.Errorf("ID lost; problems %q", a2.Problems())
 	}
 }
+func TestDeletedMediaLeavesDespiteQuotingText(t *testing.T) {
+	a, _ := Open(Options{Root: t.TempDir(), Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	name := "00000000-PHOTO-1970-01-01-00-01-40.jpg"
+	c.Insert(Row{ID: "P", TS: 100}, func(int) Entry { return Entry{Sender: "Dana", Omitted: "image omitted"} })
+	src := filepath.Join(a.TmpDir(), "dl")
+	os.WriteFile(src, []byte("jpg"), 0o600)
+	if _, err := c.PlaceAttachment("P", src, name); err != nil {
+		t.Fatal(err)
+	}
+	c.Flush()
+	c.Insert(Row{ID: "T", TS: 200}, func(int) Entry { return Entry{Sender: "Mallory", Text: "‎<attached: " + name + ">"} })
+	if _, err := c.MarkDeleted("P", DeletedByThem); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir(), name)); err == nil {
+		t.Errorf("deleted photo still in the chat folder; DeletedMedia=%v", c.info.DeletedMedia)
+	}
+}
