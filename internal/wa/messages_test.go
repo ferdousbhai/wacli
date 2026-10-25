@@ -36,7 +36,7 @@ func TestParseHistoryMessageDeviceSentUsesDestinationChat(t *testing.T) {
 	h := &waProto.WebMessageInfo{
 		Key: &waProto.MessageKey{
 			ID:        proto.String("sent-from-phone"),
-			FromMe:    proto.Bool(false),
+			FromMe:    proto.Bool(true),
 			RemoteJID: proto.String("me@s.whatsapp.net"),
 		},
 		MessageTimestamp: proto.Uint64(uint64(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Unix())),
@@ -66,7 +66,7 @@ func TestParseLiveMessageDeviceSentMetaUsesDestinationChat(t *testing.T) {
 			MessageSource: types.MessageSource{
 				Chat:     types.NewJID("me", types.DefaultUserServer),
 				Sender:   types.NewJID("me", types.DefaultUserServer),
-				IsFromMe: false,
+				IsFromMe: true,
 			},
 			DeviceSentMeta: &types.DeviceSentMeta{
 				DestinationJID: "15551234567@s.whatsapp.net",
@@ -612,4 +612,23 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// Anyone can wrap a message as "sent from your other device"; from someone
+// else it must stay theirs, in its own chat.
+func TestDeviceSentWrapperFromSomeoneElseIsIgnored(t *testing.T) {
+	evt := &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:   types.NewJID("120363000000000001", types.GroupServer),
+				Sender: types.NewJID("6284444444444", types.DefaultUserServer),
+			},
+			DeviceSentMeta: &types.DeviceSentMeta{DestinationJID: "15551234567@s.whatsapp.net"},
+		},
+		Message: &waProto.Message{Conversation: proto.String("forged from me")},
+	}
+	pm := ParseLiveMessage(evt)
+	if pm.FromMe || pm.Chat.Server != types.GroupServer {
+		t.Fatalf("FromMe=%v Chat=%s", pm.FromMe, pm.Chat)
+	}
 }

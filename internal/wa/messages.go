@@ -210,11 +210,13 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) *waProto.Message {
 	return m
 }
 
+// applyDeviceSentDestination points one of your own messages, relayed from
+// your phone, at the chat it was sent to. Anyone can wrap a message this
+// way, so it is honoured only for messages from your own account.
 func applyDeviceSentDestination(destination string, pm *ParsedMessage) {
-	if pm == nil {
+	if pm == nil || !pm.FromMe {
 		return
 	}
-	pm.FromMe = true
 	if chat, err := types.ParseJID(strings.TrimSpace(destination)); err == nil && !chat.IsEmpty() {
 		pm.Chat = chat
 	}

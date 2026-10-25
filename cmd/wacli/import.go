@@ -100,7 +100,6 @@ func exportChatName(path string) string {
 	return strings.TrimPrefix(name, "WhatsApp Chat - ")
 }
 
-// maxImportFile is WhatsApp's own limit for a shared file.
 // Limits for unpacking an export zip, which may come from someone else: a
 // file as large as WhatsApp media can be, and a bound on the whole.
 const maxImportFile = wa.MaxMediaDownloadSize
@@ -118,6 +117,12 @@ func unzipFlat(ctx context.Context, src, dst string) error {
 		return err
 	}
 	defer zr.Close()
+	// Exports are mostly media, already compressed: a zip that unpacks to
+	// far more than its size is not one.
+	limit := maxImportTotal
+	if st, err := os.Stat(src); err == nil {
+		limit = min(limit, 20*st.Size()+256<<20)
+	}
 	if len(zr.File) > maxImportFiles {
 		return fmt.Errorf("export zip has %d files; an export has at most one per message", len(zr.File))
 	}
@@ -143,14 +148,14 @@ func unzipFlat(ctx context.Context, src, dst string) error {
 			return err
 		}
 		var n int64
-		n, err = io.Copy(out, io.LimitReader(rc, min(maxImportFile, maxImportTotal-total)+1))
+		n, err = io.Copy(out, io.LimitReader(rc, min(maxImportFile, limit-total)+1))
 		total += n
 		switch {
 		case err != nil:
 		case n > maxImportFile:
 			err = fmt.Errorf("%s in export zip is larger than %d bytes", name, int64(maxImportFile))
-		case total > maxImportTotal:
-			err = fmt.Errorf("export zip unpacks to more than %d bytes", int64(maxImportTotal))
+		case total > limit:
+			err = fmt.Errorf("export zip unpacks to more than %d bytes", limit)
 		}
 		rc.Close()
 		if cerr := out.Close(); err == nil {

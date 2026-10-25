@@ -686,15 +686,16 @@ func (a *Archiver) samePerson(ctx context.Context, x, y string) bool {
 
 func (a *Archiver) isAdmin(ctx context.Context, chat types.JID, sender string) bool {
 	who, err := types.ParseJID(sender)
-	if err != nil || chat.Server != types.GroupServer {
+	if err != nil || who.IsEmpty() || chat.Server != types.GroupServer {
 		return false
 	}
 	info, err := a.wa.GetGroupInfo(ctx, chat)
 	if err != nil || info == nil {
 		return false // unknown: keep the message
 	}
+	user := a.canonical(ctx, who).User
 	for _, p := range info.Participants {
-		if (a.samePerson(ctx, p.JID.String(), who.String()) || (!p.LID.IsEmpty() && a.samePerson(ctx, p.LID.String(), who.String()))) && (p.IsAdmin || p.IsSuperAdmin) {
+		if (p.IsAdmin || p.IsSuperAdmin) && (p.JID.User == who.User || p.LID.User == who.User || p.PhoneNumber.User == user || p.JID.User == user) {
 			return true
 		}
 	}
