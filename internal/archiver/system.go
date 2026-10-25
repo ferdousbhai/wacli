@@ -84,7 +84,7 @@ func (a *Archiver) archiveStub(ctx context.Context, b *batch, chatID, hint strin
 	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_REMOVE:
 		text = fmt.Sprintf("%s removed %s", actor(), people())
 	case waWeb.WebMessageInfo_GROUP_PARTICIPANT_LEAVE:
-		text = fmt.Sprintf("%s left", people())
+		text = fmt.Sprintf("%s left", capitalize(people()))
 	case waWeb.WebMessageInfo_CALL_MISSED_VOICE:
 		text = "Missed voice call, ‎Tap to call back"
 	case waWeb.WebMessageInfo_CALL_MISSED_VIDEO:
@@ -148,7 +148,7 @@ func (a *Archiver) archiveGroupInfo(ctx context.Context, v *events.GroupInfo) {
 		a.archiveSystem(ctx, nil, v.JID, v.Name.Name, id("subject"), v.Timestamp, actor == "You", "",
 			fmt.Sprintf("%s changed the group name to “%s”", actor, v.Name.Name))
 	}
-	if v.Topic != nil {
+	if v.Topic != nil && !v.Topic.TopicDeleted { // a removed description: wording unknown
 		a.archiveSystem(ctx, nil, v.JID, "", id("topic"), v.Timestamp, actor == "You", "",
 			fmt.Sprintf("%s changed the group description", actor))
 	}
@@ -182,4 +182,18 @@ func capitalize(who string) string {
 		return "You"
 	}
 	return who
+}
+
+// archiveGroupIcon records a live group icon change (a removed icon is
+// skipped: its iOS wording is unknown).
+func (a *Archiver) archiveGroupIcon(ctx context.Context, v *events.Picture) {
+	if v.JID.Server != types.GroupServer || v.Remove || v.Author.IsEmpty() {
+		return
+	}
+	actor := a.names.contact(ctx, v.Author)
+	if a.names.isOwn(v.Author) {
+		actor = "You"
+	}
+	a.archiveSystem(ctx, nil, v.JID, "", fmt.Sprintf("wacli:icon:%d", v.Timestamp.Unix()), v.Timestamp, actor == "You", "",
+		fmt.Sprintf("%s changed this group's icon", actor))
 }

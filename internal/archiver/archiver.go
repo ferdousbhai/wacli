@@ -166,6 +166,8 @@ func (a *Archiver) handle(evt any) {
 		a.nameChanged()
 	case *events.GroupInfo:
 		a.archiveGroupInfo(ctx, v)
+	case *events.Picture:
+		a.archiveGroupIcon(ctx, v)
 	case *events.MediaRetry:
 		a.media.onRetry(v)
 	case *events.Connected:

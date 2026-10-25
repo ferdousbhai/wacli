@@ -724,3 +724,20 @@ func TestGroupRemovalsAndInviteJoins(t *testing.T) {
 		}
 	}
 }
+
+func TestYouLeftAndLiveIconChange(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	leave := web(group, "S1", "", true, t0, nil)
+	leave.Message.MessageStubType = waWeb.WebMessageInfo_GROUP_PARTICIPANT_LEAVE.Enum()
+	leave.Message.MessageStubParameters = []string{me}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", leave))
+	g, _ := types.ParseJID(group)
+	m, _ := types.ParseJID(me)
+	d, _ := types.ParseJID(dana)
+	a.handle(&events.GroupInfo{JID: g, Sender: &m, Timestamp: time.Unix(t0, 0), Leave: []types.JID{m}})
+	a.handle(&events.Picture{JID: g, Author: d, Timestamp: time.Unix(t0+60, 0), PictureID: "1"})
+	want := "[2025-10-24, 04:39:33] Maya: ‎You left\r\n[2025-10-24, 04:40:33] Maya: ‎Dana Putri changed this group's icon\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
