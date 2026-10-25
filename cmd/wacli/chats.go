@@ -33,7 +33,7 @@ func newChatsCmd(f *rootFlags) *cobra.Command {
 		Use:   "chats",
 		Short: "List archived chats and where their folders are",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ar, err := f.openArchive()
+			ar, err := f.openArchive(true)
 			if err != nil {
 				return err
 			}
@@ -149,7 +149,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 		Use:   "doctor",
 		Short: "Show link status, sync health and where the archive lives",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ar, err := f.openArchive()
+			ar, err := f.openArchive(true)
 			if err != nil {
 				return err
 			}
@@ -189,23 +189,16 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				if running && !st.Connected {
 					problems = append(problems, "sync is running but not connected to WhatsApp")
 				}
-				for _, r := range st.RepairedChats {
-					problems = append(problems, "index rebuilt (some old messages can no longer be edited or deleted): "+r)
-				}
+				problems = append(problems, st.Problems...)
 			}
 			if check {
-				if running {
-					problems = append(problems, "--check skipped: stop sync first (it owns the files)")
-				} else {
-					for _, c := range ar.Chats() {
-						if _, err := ar.Chat(c.JID); err != nil {
-							problems = append(problems, c.Folder+": "+err.Error())
-						}
-					}
-					for _, r := range ar.Repairs() {
-						problems = append(problems, "index rebuilt: "+r)
+				// Read-only: what a repair would do is reported, not done.
+				for _, c := range ar.Chats() {
+					if _, err := ar.Chat(c.JID); err != nil {
+						problems = append(problems, c.Folder+": "+err.Error())
 					}
 				}
+				problems = append(problems, ar.Problems()...)
 			}
 			info["problems"] = problems
 			if f.asJSON {
@@ -229,7 +222,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&check, "check", false, "also open every chat and verify its files (sync must be stopped)")
+	cmd.Flags().BoolVar(&check, "check", false, "also read every chat and verify its files (changes nothing)")
 	return cmd
 }
 

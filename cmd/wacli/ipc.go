@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -127,9 +127,18 @@ func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
 func handleConn(ctx context.Context, s *session, conn net.Conn) {
 	defer conn.Close()
 	var r request
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&r); err != nil {
+	dec := json.NewDecoder(conn)
+	if err := dec.Decode(&r); err != nil {
 		return
 	}
+	// The client waits silently for the answer; if it goes away (Ctrl+C),
+	// stop the work it asked for.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, io.MultiReader(dec.Buffered(), conn))
+		cancel()
+	}()
 	res, err := r.run(ctx, s)
 	resp := response{Result: res}
 	if err != nil {

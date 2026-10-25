@@ -72,6 +72,9 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 			return nil, err
 		}
 		for _, p := range list {
+			if p.Gone {
+				continue // from versions that kept these
+			}
 			p.NextTry = time.Time{} // retry everything on start
 			q.items[p.key()] = p
 		}
@@ -103,13 +106,7 @@ func (q *mediaQueue) forget(chat, id string) {
 func (q *mediaQueue) len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	n := 0
-	for _, p := range q.items {
-		if !p.Gone {
-			n++
-		}
-	}
-	return n
+	return len(q.items)
 }
 
 func (q *mediaQueue) poke() {
@@ -148,23 +145,15 @@ func (q *mediaQueue) writeLocked() {
 	}
 }
 
-func (q *mediaQueue) start(ctx context.Context) {
-	go func() {
-		t := time.NewTicker(2 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				q.flush()
-				return
-			case <-t.C:
-				q.flush()
-			}
-		}
-	}()
+// run downloads queued media until ctx ends, saving the queue every couple of
+// seconds and once more on the way out.
+func (q *mediaQueue) run(ctx context.Context) {
+	var wg sync.WaitGroup
 	jobs := make(chan *pendingMedia)
 	for range mediaWorkers {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for p := range jobs {
 				q.download(ctx, p)
 				q.mu.Lock()
@@ -174,26 +163,30 @@ func (q *mediaQueue) start(ctx context.Context) {
 			}
 		}()
 	}
-	go func() {
-		defer close(jobs)
-		tick := time.NewTicker(30 * time.Second)
-		defer tick.Stop()
-		for {
-			for _, p := range q.due() {
-				select {
-				case jobs <- p:
-				case <-ctx.Done():
-					return
-				}
-			}
+	save := time.NewTicker(2 * time.Second)
+	defer save.Stop()
+	check := time.NewTicker(30 * time.Second)
+	defer check.Stop()
+	defer q.flush()
+	defer wg.Wait()
+	defer close(jobs)
+	for {
+		for _, p := range q.due() {
 			select {
+			case jobs <- p:
 			case <-ctx.Done():
 				return
-			case <-q.wake:
-			case <-tick.C:
 			}
 		}
-	}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-save.C:
+			q.flush()
+		case <-q.wake:
+		case <-check.C:
+		}
+	}
 }
 
 func (q *mediaQueue) due() []*pendingMedia {
@@ -205,7 +198,7 @@ func (q *mediaQueue) due() []*pendingMedia {
 	now := time.Now()
 	var out []*pendingMedia
 	for k, p := range q.items {
-		if p.Gone || q.active[k] || now.Before(p.NextTry) {
+		if q.active[k] || now.Before(p.NextTry) {
 			continue
 		}
 		q.active[k] = true
@@ -222,7 +215,7 @@ func (q *mediaQueue) wait(ctx context.Context) {
 		busy := len(q.active) > 0
 		now := time.Now()
 		for _, p := range q.items {
-			if !p.Gone && !now.Before(p.NextTry) {
+			if !now.Before(p.NextTry) {
 				busy = true
 			}
 		}
@@ -275,6 +268,9 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 		e.Omitted, e.Attachment = "", p.Name
 		return true
 	})
+	if err == nil {
+		err = c.Flush() // on disk before it leaves the queue
+	}
 	if err != nil {
 		q.a.logf("warning: %v", err)
 		return
@@ -301,6 +297,9 @@ func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
 	q.forget(p.Chat, p.ID)
 }
 
+// maxAttempts bounds retries; with the backoff that is several days.
+const maxAttempts = 12
+
 func (q *mediaQueue) failed(p *pendingMedia, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -309,15 +308,21 @@ func (q *mediaQueue) failed(p *pendingMedia, err error) {
 		return
 	}
 	cur.Attempts++
-	cur.Gone = p.Gone
-	backoff := time.Duration(1<<min(cur.Attempts, 10)) * time.Minute
-	cur.NextTry = time.Now().Add(backoff)
-	q.saveLocked()
-	if cur.Gone {
-		q.a.logf("media unavailable on phone: %s %s", p.Chat, p.Name)
-	} else if cur.Attempts == 1 {
-		q.a.logf("media download failed (%v), will retry: %s", err, p.Name)
+	switch {
+	case p.Gone:
+		// The entry stays "… omitted", as in an export without that file.
+		q.a.logf("media no longer on the phone, giving up: %s", p.Name)
+		delete(q.items, p.key())
+	case cur.Attempts >= maxAttempts:
+		q.a.logf("media download failed %d times (%v), giving up: %s", cur.Attempts, err, p.Name)
+		delete(q.items, p.key())
+	default:
+		cur.NextTry = time.Now().Add(time.Duration(1<<min(cur.Attempts, 10)) * time.Minute)
+		if cur.Attempts == 1 {
+			q.a.logf("media download failed (%v), will retry: %s", err, p.Name)
+		}
 	}
+	q.saveLocked()
 }
 
 // retryFromPhone asks the phone to re-upload expired media.

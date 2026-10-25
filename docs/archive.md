@@ -21,8 +21,10 @@ messages keep arriving. There is no message database: the folders are the data.
     pending-media.json                        media not downloaded yet (keys to retry)
     status.json                               written by a running sync; read by `wacli doctor`
     deleted/                                  media of messages later deleted for everyone
-    LOCK
-~/.local/state/wacli/session.db               WhatsApp login + Signal keys (whatsmeow)
+~/.local/state/wacli/                         session store (--store, WACLI_STORE_DIR)
+  session.db                                  WhatsApp login + Signal keys (whatsmeow)
+  LOCK                                        held by the one process using the session
+  .send.sock                                  where a running sync takes send/backfill/import
 ```
 
 The index exists only because WhatsApp refers to earlier messages by ID (edits,
@@ -41,14 +43,19 @@ Matched against a real iOS export (`internal/archive/testdata`).
   Kinds: PHOTO .jpg, VIDEO .mp4, AUDIO .opus, STICKER .webp, GIF .mp4;
   documents keep their filename (`NNNNNNNN-<name>`) and are preceded by
   `<name> • ‎<n> pages`.
-- `NNNNNNNN` is the entry's 0-based position at the time the file is saved and
+- `NNNNNNNN` is the entry's 0-based position when it was first written and
   never changes afterwards (a later backfill can make numbers non-monotonic).
+  Files merged by `import` keep the export's own names.
 - System lines are attributed to the chat name and prefixed with U+200E:
   `‎You created group “…”`, `‎Messages and calls are end-to-end encrypted…`,
   `‎Voice call, ‎‎32 min • ‎3 joined`.
 - Edited: `text ‎<This message was edited>`. Deleted: `‎This message was
   deleted.` / `‎You deleted this message.`
 - Mentions: `@⁨Name⁩` (U+2068 … U+2069).
+- Locations: `‎Location: https://maps.google.com/?q=<lat>,<lng>`.
+- Senders are the names in your contacts; people not in them appear as
+  `~ Profile name` or as their number, as on the phone. Your own messages use
+  your profile name. Names learned later replace numbers already written.
 - Reactions, quotes, receipts, starred state: not exported, not stored.
 
 ## How chats stay current
@@ -60,12 +67,12 @@ Matched against a real iOS export (`internal/archive/testdata`).
 | New message, newest in chat (the normal case) | One rendered entry is appended to `_chat.txt` with a single `write` (fast path), one row appended to the index. |
 | New message older than the last entry (offline backlog, history sync, backfill) | Entry is inserted in timestamp order; `_chat.txt` and index are rewritten to a temp file and renamed over the original, so readers never see a partial file. |
 | Same message again (history overlap, redelivery) | Ignored: its ID is already in the index. |
-| Media message | Media is downloaded first, then the entry is written with `<attached: …>`. If the download fails (expired on the CDN, offline) the entry is written as `‎image omitted` and queued in `pending-media.jsonl`; a background retry (CDN, then asking the phone to re-upload) rewrites the entry to `<attached: …>` once the file exists. |
+| Media message | The entry is written as `‎image omitted` (or video, audio, …) and the file is queued in `pending-media.json`. A download worker fetches it (from WhatsApp's servers, else by asking the phone to re-upload) and rewrites the entry to `‎<attached: …>`. Failures retry with backoff; media the phone no longer has stays "omitted". |
 | Edit | Entry located through the index, text replaced, `‎<This message was edited>` appended, file rewritten atomically. |
 | Delete for everyone | Entry becomes `‎This message was deleted.`; its media file moves to `.wacli/deleted/`, keeping the chat folder identical to an export. |
 | Reaction, receipt, typing, presence | Ignored. |
-| Group renamed | System entry `‎X changed the group name to “Y”`. Folder name stays put, so paths that humans and agents saved keep working. |
-| New chat | Folder created with the encryption notice (and `‎… created group` for groups). |
+| Group renamed | System entry `‎X changed the group name to “Y”`. The folder keeps its name, so saved paths keep working. |
+| New chat | Folder created. Until the contact's or group's name is known (right after linking) it is named by number; it is renamed once the name arrives. |
 
 Writes during a history sync are batched: each chat is written once per batch,
 not once per message.
@@ -82,12 +89,13 @@ Gaps:
 - **wacli offline for a while**: the server queues messages for the linked
   device and replays them on reconnect; they go through the insert path above.
 - **Missing older history**: `wacli backfill` walks backwards from the newest
-  message using a per-chat cursor (the oldest message of the last contiguous
-  batch), not the oldest message on disk. A stray old system message therefore
-  can't hide a gap in the middle of a chat.
-- **Anything the protocol won't return**: `wacli import <export.zip>` merges a
-  phone export into the archive, matching entries by time, sender and text.
+  message, page by page; each request starts after the last message of the
+  previous page in the phone's own order. That order isn't always time order,
+  so this also fills gaps in the middle of a chat.
+- **Anything the phone won't send**: phones don't hand linked devices every
+  stretch of history. `wacli import <export.zip>` merges a phone export into the
+  archive, matching entries by time, sender and text.
 
 Readers need nothing from wacli: `cat`, `grep -r`, `tail -f _chat.txt`, or an
-editor. Sends (`wacli send …`) go through the running sync process over
-`.wacli/sync.sock`, so the sent message lands in the archive like any other.
+editor. `wacli send`, `backfill` and `import` go through the running sync over
+its socket, so what they change lands in the archive like anything else.

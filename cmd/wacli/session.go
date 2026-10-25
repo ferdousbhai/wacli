@@ -34,7 +34,7 @@ func openSession(f *rootFlags) (*session, error) {
 		return nil, err
 	}
 	s := &session{lock: l}
-	if s.ar, err = f.openArchive(); err != nil {
+	if s.ar, err = f.openArchive(false); err != nil {
 		s.close()
 		return nil, err
 	}
@@ -53,29 +53,17 @@ func openSession(f *rootFlags) (*session, error) {
 // after login is not missed.
 func (s *session) start(ctx context.Context, opts wa.ConnectOptions) error {
 	s.arc.Start(ctx)
-	if err := s.wa.Connect(ctx, opts); err != nil {
-		return err
-	}
-	// Contact names and group subjects sync after the first history batches;
-	// keep renaming chats that were still named by number.
-	go func() {
-		t := time.NewTicker(2 * time.Minute)
-		defer t.Stop()
-		for {
-			s.arc.RefreshNames(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	}()
-	return nil
+	return s.wa.Connect(ctx, opts)
 }
 
+// close shuts down in the order that loses nothing: no new events, finish
+// the ones in flight and save, then let go of the session and the lock.
 func (s *session) close() {
+	if s.wa != nil {
+		s.wa.Disconnect()
+	}
 	if s.arc != nil {
-		s.arc.Flush()
+		s.arc.Close()
 	}
 	if s.wa != nil {
 		s.wa.Close()
@@ -90,14 +78,14 @@ func (s *session) close() {
 func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	last := int64(-1)
-	for {
+	var last int64
+	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		if n := s.arc.Added(); n != last && n > 0 && n%500 < 50 {
+		if n := s.arc.Added(); i%10 == 0 && n != last {
 			fmt.Fprintf(os.Stderr, "\rarchived %d messages, %d attachments pending   ", n, s.arc.PendingMedia())
 			last = n
 		}

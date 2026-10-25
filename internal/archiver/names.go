@@ -45,11 +45,19 @@ func (n *names) noteGroup(jid, subject string) {
 	n.mu.Unlock()
 }
 
+// ownFallback is written for your own messages until your profile name has
+// synced to this link; RefreshNames replaces it later.
+const ownFallback = "You"
+
+// pushPrefix marks a profile name of someone not in your contacts, as iOS
+// writes it ("~ Name", with a narrow no-break space).
+const pushPrefix = "~\u202f"
+
 func (n *names) own() string {
 	if name := n.wa.OwnPushName(); name != "" {
 		return name
 	}
-	return "You"
+	return ownFallback
 }
 
 func (n *names) isOwn(jid types.JID) bool {
@@ -90,7 +98,7 @@ func (n *names) contact(ctx context.Context, jid types.JID) string {
 	}
 	n.mu.Unlock()
 	if push != "" {
-		return "~ " + push
+		return pushPrefix + push
 	}
 	if pn.Server == types.DefaultUserServer {
 		if pn.User == "0" {
@@ -157,7 +165,7 @@ func (n *names) chat(ctx context.Context, jid types.JID, hint string) string {
 		return jid.User
 	}
 	if name := n.contact(ctx, jid); name != "" {
-		return strings.TrimPrefix(name, "~ ")
+		return strings.TrimPrefix(name, pushPrefix)
 	}
 	return hint
 }
@@ -173,7 +181,7 @@ func (n *names) mentions(ctx context.Context, text string, jids []string) string
 		if !strings.Contains(text, token) {
 			continue
 		}
-		name := strings.TrimPrefix(n.contact(ctx, jid), "~ ")
+		name := strings.TrimPrefix(n.contact(ctx, jid), pushPrefix)
 		text = strings.ReplaceAll(text, token, "@⁨"+name+"⁩")
 	}
 	return text

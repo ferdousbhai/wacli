@@ -258,12 +258,156 @@ func TestLoadRepairsMisalignedIndex(t *testing.T) {
 	if len(got) != 4 || got[0].ID != "A" || !strings.HasPrefix(got[1].ID, "repair:") || got[2].ID != "C" || got[3].ID != "D" {
 		t.Errorf("rows %+v", got)
 	}
-	if len(a2.Repairs()) != 1 {
-		t.Errorf("repairs %v", a2.Repairs())
+	if len(a2.Problems()) != 1 {
+		t.Errorf("repairs %v", a2.Problems())
 	}
 	// It keeps working: appends land and edits find their entry.
 	c2.Insert(Row{ID: "E", TS: 500}, text("E"))
 	if ok, _ := c2.Update("C", func(e *Entry, _ int) bool { e.Text = "C2"; return true }); !ok {
 		t.Error("edit after repair failed")
+	}
+}
+
+func TestReadOnlyNeverWrites(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	// An index row ahead of its entry, as between sync's two appends.
+	appendFile(c.indexPath(), formatRow(Row{ID: "B", TS: 2}))
+	before, _ := os.ReadFile(c.indexPath())
+
+	ro, _ := Open(Options{Root: root, Location: time.UTC, ReadOnly: true})
+	c2, err := ro.Chat("1@s.whatsapp.net")
+	if err != nil || c2.Len() != 1 {
+		t.Fatalf("read-only load: %v len=%d", err, c2.Len())
+	}
+	if after, _ := os.ReadFile(c.indexPath()); string(after) != string(before) {
+		t.Error("read-only open rewrote the index")
+	}
+	if _, _, err := c2.Insert(Row{ID: "C", TS: 3}, text("x")); err != ErrReadOnly {
+		t.Errorf("insert: %v", err)
+	}
+}
+
+func TestMissingFolderStartsOverAndKeepsWorking(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	os.RemoveAll(c.Dir()) // the user moved the folder away
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, err := b.Chat("1@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c2.Insert(Row{ID: "B", TS: 2}, text("two")); err != nil {
+		t.Fatal(err)
+	}
+	if got := chatText(t, c2); got != "[1970-01-01, 00:00:02] Dana: two\r\n" {
+		t.Errorf("got %q", got)
+	}
+	if len(b.Problems()) != 1 {
+		t.Errorf("problems %v", b.Problems())
+	}
+	if m, _ := filepath.Glob(c2.indexPath() + ".orphaned-*"); len(m) != 1 {
+		t.Error("old index not kept")
+	}
+}
+
+func TestFolderDeletedWhileRunningIsRecreated(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	os.RemoveAll(c.Dir())
+	if _, _, err := c.Insert(Row{ID: "B", TS: 2}, text("two")); err != nil {
+		t.Fatal(err)
+	}
+	want := "[1970-01-01, 00:00:01] Dana: one\r\n[1970-01-01, 00:00:02] Dana: two\r\n"
+	if got := chatText(t, c); got != want {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestFailedFlushStaysDirtyUntilAWriteSucceeds(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "B", TS: 2}, text("two"))
+	c.Hold()
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	os.Chmod(c.Dir(), 0o500) // writes fail
+	if err := c.Release(); err == nil {
+		t.Fatal("expected write failure")
+	}
+	os.Chmod(c.Dir(), 0o700)
+	// The next newest-message write must not take the append fast path on
+	// top of the stale file.
+	c.Insert(Row{ID: "C", TS: 3}, text("three"))
+	want := "[1970-01-01, 00:00:01] Dana: one\r\n[1970-01-01, 00:00:02] Dana: two\r\n[1970-01-01, 00:00:03] Dana: three\r\n"
+	if got := chatText(t, c); got != want {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestInterruptedRenameIsFinishedOnOpen(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "+1555", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	// Crash after recording the move, before the folder was renamed.
+	a.UpdateInfo("1@s.whatsapp.net", func(ci *ChatInfo) {
+		ci.PrevFolder, ci.Folder, ci.Name = ci.Folder, "WhatsApp Chat - Dana", "Dana"
+	})
+	b, err := Open(Options{Root: root, Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if c2.Len() != 1 || filepath.Base(c2.Dir()) != "WhatsApp Chat - Dana" {
+		t.Errorf("dir %s len %d", c2.Dir(), c2.Len())
+	}
+}
+
+func TestRenameToSameFolderDoesNotMove(t *testing.T) {
+	a := openTest(t)
+	a.EnsureChat("1@s.whatsapp.net", "Pool\nSPA", "dm", "+1")
+	folder, err := a.Rename("1@s.whatsapp.net", "Pool SPA", "+1")
+	if err != nil || folder != "WhatsApp Chat - Pool SPA" {
+		t.Errorf("folder %q err %v", folder, err)
+	}
+}
+
+func TestMergeKeepsIdenticalLines(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	ok := Entry{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Text: "ok"}
+	if res, err := c.Merge([]Entry{ok, ok}, t.TempDir()); err != nil || res.Added != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if res, _ := c.Merge([]Entry{ok, ok}, t.TempDir()); res.Added != 0 || res.Matched != 2 {
+		t.Errorf("second import %+v", res)
+	}
+}
+
+func TestMergeMissingFileLeavesItOmitted(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	in := []Entry{{Time: time.Unix(5, 0).UTC(), Sender: "Dana", Attachment: "00000001-PHOTO-1970-01-01-00-00-05.jpg"}}
+	if _, err := c.Merge(in, t.TempDir()); err == nil {
+		t.Fatal("expected missing-file error")
+	}
+	if got := chatText(t, c); got != "‎[1970-01-01, 00:00:05] Dana: ‎image omitted\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestRenameGroupWithColonInName(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("g@g.us", "Team: Ops", "group", "")
+	c.Insert(Row{ID: "S", TS: 1}, func(int) Entry { return Entry{Sender: "Team: Ops", System: true, Text: "You were added"} })
+	a.Rename("g@g.us", "Ops", "")
+	if got := chatText(t, c); got != "[1970-01-01, 00:00:01] Ops: ‎You were added\r\n" {
+		t.Errorf("got %q", got)
 	}
 }

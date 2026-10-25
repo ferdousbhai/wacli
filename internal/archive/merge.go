@@ -8,15 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
 
 // MergeResult counts what an import changed.
 type MergeResult struct {
-	Matched       int `json:"matched"`        // already in the chat
-	Added         int `json:"added"`          // new entries
-	MediaRestored int `json:"media_restored"` // "omitted" entries that got their file
+	Matched       int // already in the chat
+	Added         int // new entries
+	MediaRestored int // "omitted" entries that got their file
 }
 
 // matchWindow absorbs the second WhatsApp sometimes adds between a message's
@@ -26,41 +27,57 @@ const matchWindow = 2 * time.Second
 // Merge adds entries from a phone export (parsed from its _chat.txt) that the
 // chat doesn't have yet. srcDir holds the export's attachments. Entries match
 // when sender and time agree within matchWindow and their content agrees.
-func (c *Chat) Merge(entries []Entry, srcDir string) (MergeResult, error) {
-	var res MergeResult
+func (c *Chat) Merge(entries []Entry, srcDir string) (res MergeResult, err error) {
+	c.Hold()
+	defer func() {
+		if rerr := c.Release(); err == nil {
+			err = rerr
+		}
+	}()
 	used := map[string]bool{} // each archived entry matches one imported entry
-	for _, in := range entries {
-		id, pos, found := c.find(in, used)
-		if found {
+	for i, in := range entries {
+		if id, found := c.find(in, used); found {
 			used[id] = true
 			res.Matched++
-			if in.Attachment == "" {
-				continue
-			}
-			restored, err := c.restoreMedia(id, pos, in, srcDir)
-			if err != nil {
-				return res, err
-			}
-			if restored {
-				res.MediaRestored++
+			if in.Attachment != "" {
+				restored, err := c.restoreMedia(id, in, srcDir)
+				if err != nil {
+					return res, err
+				}
+				if restored {
+					res.MediaRestored++
+				}
 			}
 			continue
 		}
-		if in.Attachment != "" {
-			name, err := c.copyAttachment(in.Attachment, srcDir)
-			if err != nil {
+		src := in.Attachment
+		if src != "" {
+			if in.Attachment, err = c.freeFileName(src); err != nil {
 				return res, err
 			}
-			in.Attachment = name
 		}
-		sum := sha256.Sum256([]byte(Render(in, c.a.opts.DateFormat)))
+		// The export position keeps identical lines (two "ok"s in one
+		// second) apart.
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s", i, Render(in, c.a.opts.DateFormat))))
 		row := Row{ID: "import:" + hex.EncodeToString(sum[:8]), TS: in.Time.Unix()}
 		entry := in
-		if _, inserted, err := c.Insert(row, func(int) Entry { return entry }); err != nil {
+		_, inserted, err := c.Insert(row, func(int) Entry { return entry })
+		if err != nil {
 			return res, err
-		} else if inserted {
-			used[row.ID] = true
-			res.Added++
+		}
+		if !inserted {
+			continue
+		}
+		used[row.ID] = true
+		res.Added++
+		if src != "" {
+			if err := c.copyFile(src, srcDir, in.Attachment); err != nil {
+				c.Update(row.ID, func(e *Entry, _ int) bool {
+					e.Attachment, e.Omitted = "", OmittedText(mediaTypeOf(src))
+					return true
+				})
+				return res, err
+			}
 		}
 	}
 	return res, nil
@@ -69,16 +86,18 @@ func (c *Chat) Merge(entries []Entry, srcDir string) (MergeResult, error) {
 // find locates the existing entry, not yet used, that is the same message as
 // in, preferring the closest timestamp: two photos sent a second apart must
 // not both match the first.
-func (c *Chat) find(in Entry, used map[string]bool) (string, int, bool) {
+func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	best, bestD := -1, matchWindow+1
-	for i, row := range c.rows {
-		d := time.Duration(row.TS-in.Time.Unix()) * time.Second
+	window := int64(matchWindow / time.Second)
+	t := in.Time.Unix()
+	best, bestD := -1, window+1
+	for i := sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS >= t-window }); i < len(c.rows) && c.rows[i].TS <= t+window; i++ {
+		d := c.rows[i].TS - t
 		if d < 0 {
 			d = -d
 		}
-		if d > matchWindow || d >= bestD || used[row.ID] {
+		if d >= bestD || used[c.rows[i].ID] {
 			continue
 		}
 		e, err := Parse(c.entries[i], c.a.opts.DateFormat, c.a.opts.Location)
@@ -88,9 +107,16 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, int, bool) {
 		best, bestD = i, d
 	}
 	if best < 0 {
-		return "", -1, false
+		return "", false
 	}
-	return c.rows[best].ID, best, true
+	return c.rows[best].ID, true
+}
+
+// Find reports whether the chat already has an entry for the same message as
+// e (same sender, time within two seconds, same content).
+func (c *Chat) Find(e Entry) bool {
+	_, ok := c.find(e, nil)
+	return ok
 }
 
 func sameContent(a, b Entry) bool {
@@ -112,13 +138,15 @@ func normalizeText(s string) string {
 	return strings.TrimSpace(mentionRE.ReplaceAllString(s, "@"))
 }
 
-func (c *Chat) restoreMedia(id string, pos int, in Entry, srcDir string) (bool, error) {
-	e, _, ok := c.Get(id)
-	if !ok || e.Omitted == "" {
+func (c *Chat) restoreMedia(id string, in Entry, srcDir string) (bool, error) {
+	if e, _, ok := c.Get(id); !ok || e.Omitted == "" {
 		return false, nil
 	}
-	name, err := c.copyAttachment(in.Attachment, srcDir)
+	name, err := c.freeFileName(in.Attachment)
 	if err != nil {
+		return false, err
+	}
+	if err := c.copyFile(in.Attachment, srcDir, name); err != nil {
 		return false, err
 	}
 	return c.Update(id, func(e *Entry, _ int) bool {
@@ -127,35 +155,38 @@ func (c *Chat) restoreMedia(id string, pos int, in Entry, srcDir string) (bool, 
 	})
 }
 
-// copyAttachment copies an export's file into the chat folder, keeping its
-// name unless another file already has it.
-func (c *Chat) copyAttachment(name, srcDir string) (string, error) {
+// freeFileName returns name, or name-2, name-3… if the chat folder already
+// has a file called that.
+func (c *Chat) freeFileName(name string) (string, error) {
 	base := filepath.Base(name)
 	if base != name || base == "." || base == ".." {
 		return "", fmt.Errorf("unsafe attachment name %q", name)
 	}
-	src, err := os.Open(filepath.Join(srcDir, base))
-	if err != nil {
-		return "", err
-	}
-	defer src.Close()
+	dir := c.Dir()
+	ext := filepath.Ext(base)
 	dst := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(filepath.Join(c.Dir(), dst)); os.IsNotExist(err) {
-			break
-		}
-		ext := filepath.Ext(base)
+	for i := 2; exists(filepath.Join(dir, dst)); i++ {
 		dst = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, ext), i, ext)
 	}
+	return dst, nil
+}
+
+// copyFile copies srcDir/name into the chat folder as dst.
+func (c *Chat) copyFile(name, srcDir, dst string) error {
+	src, err := os.Open(filepath.Join(srcDir, filepath.Base(name)))
+	if err != nil {
+		return err
+	}
+	defer src.Close()
 	out, err := os.OpenFile(filepath.Join(c.Dir(), dst), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if _, err := io.Copy(out, src); err != nil {
 		out.Close()
-		return "", err
+		return err
 	}
-	return dst, out.Close()
+	return out.Close()
 }
 
 // ReadExport parses an unzipped export folder's _chat.txt.

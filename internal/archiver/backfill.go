@@ -42,9 +42,23 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 	if cursor == nil {
 		return res, errors.New("chat has no message to start from")
 	}
-	before := a.added.Load()
+	a.mu.Lock()
+	_, busy := a.backfill[chatJID]
+	if !busy {
+		a.backfill[chatJID] = nil // reserved; requestPage installs the channel
+	}
+	a.mu.Unlock()
+	if busy {
+		return res, fmt.Errorf("a backfill of %s is already running", info.Folder)
+	}
 	defer func() {
-		res.Added = a.added.Load() - before
+		a.mu.Lock()
+		delete(a.backfill, chatJID)
+		a.mu.Unlock()
+	}()
+	before := c.Len()
+	defer func() {
+		res.Added = int64(c.Len() - before)
 		if rows := c.Rows(); len(rows) > 0 {
 			res.Oldest = time.Unix(rows[0].TS, 0)
 		}
@@ -102,9 +116,9 @@ func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor arch
 	sender, _ := types.ParseJID(anchor.Sender)
 	for _, target := range candidates {
 		ch := make(chan historyBatch, 1)
-		a.waitMu.Lock()
+		a.mu.Lock()
 		a.backfill[c.JID()] = ch
-		a.waitMu.Unlock()
+		a.mu.Unlock()
 
 		info := types.MessageInfo{
 			MessageSource: types.MessageSource{Chat: target, Sender: sender, IsFromMe: anchor.FromMe, IsGroup: target.Server == types.GroupServer},
@@ -132,10 +146,12 @@ func (a *Archiver) deliverBackfill(chatID string, batch historyBatch) {
 		return
 	}
 	key := a.canonical(a.ctx, jid).String()
-	a.waitMu.Lock()
-	ch := a.backfill[key]
-	delete(a.backfill, key)
-	a.waitMu.Unlock()
+	a.mu.Lock()
+	ch, running := a.backfill[key]
+	if running {
+		a.backfill[key] = nil // still reserved; each page is delivered once
+	}
+	a.mu.Unlock()
 	if ch != nil {
 		ch <- batch
 	}

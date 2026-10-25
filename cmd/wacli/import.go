@@ -86,6 +86,9 @@ func doImport(_ context.Context, ar *archive.Archive, r request) (any, error) {
 		filepath.Base(c.Dir()), res.Matched, res.Added, res.MediaRestored), nil
 }
 
+// maxImportFile is WhatsApp's own limit for a shared file.
+const maxImportFile = 2 << 30
+
 // unzipFlat extracts the top-level files of an export; exports have no
 // subfolders, and anything else is refused rather than written outside dst.
 func unzipFlat(src, dst string) error {
@@ -111,7 +114,11 @@ func unzipFlat(src, dst string) error {
 			rc.Close()
 			return err
 		}
-		_, err = io.Copy(out, io.LimitReader(rc, 2<<30))
+		var n int64
+		n, err = io.Copy(out, io.LimitReader(rc, maxImportFile+1))
+		if err == nil && n > maxImportFile {
+			err = fmt.Errorf("%s in export zip is larger than %d bytes", name, int64(maxImportFile))
+		}
 		rc.Close()
 		if cerr := out.Close(); err == nil {
 			err = cerr

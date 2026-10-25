@@ -24,27 +24,32 @@ import (
 var debug = os.Getenv("WACLI_DEBUG") != ""
 
 type Archiver struct {
-	ar    *archive.Archive
-	wa    *wa.Client
-	names *names
-	media *mediaQueue
-	logf  func(format string, args ...any)
+	ar     *archive.Archive
+	wa     *wa.Client
+	names  *names
+	media  *mediaQueue
+	status *statusTracker
+	logf   func(format string, args ...any)
 
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup // background goroutines
+	// handling is read-locked by every event handler; Close takes it to wait
+	// for handlers in flight before saving.
+	handling sync.RWMutex
+	closed   bool
 
 	added        atomic.Int64
 	lastActivity atomic.Int64
+	namesChanged chan struct{}
 
-	waitMu sync.Mutex
-	status *statusTracker
-
-	backfill    map[string]chan historyBatch // chat JID → waiting backfill
+	mu          sync.Mutex
+	backfill    map[string]chan historyBatch // chat JID → backfill waiting for a page
 	seenPayload map[string]bool
 }
 
 type historyBatch struct {
-	last  *archive.Row // last message of the page, in the phone's order
-	count int
+	last *archive.Row // last message of the page, in the phone's order
 }
 
 func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Archiver, error) {
@@ -52,14 +57,16 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		logf = func(string, ...any) {}
 	}
 	a := &Archiver{
-		ar:          ar,
-		wa:          client,
-		names:       newNames(client),
-		logf:        logf,
-		ctx:         context.Background(),
-		status:      newStatusTracker(),
-		backfill:    map[string]chan historyBatch{},
-		seenPayload: map[string]bool{},
+		ar:           ar,
+		wa:           client,
+		names:        newNames(client),
+		status:       newStatusTracker(),
+		logf:         logf,
+		ctx:          context.Background(),
+		cancel:       func() {},
+		namesChanged: make(chan struct{}, 1),
+		backfill:     map[string]chan historyBatch{},
+		seenPayload:  map[string]bool{},
 	}
 	q, err := newMediaQueue(a)
 	if err != nil {
@@ -70,12 +77,33 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 	return a, nil
 }
 
-// Start begins handling events and downloading media until ctx ends.
+// Start begins handling events, downloading media, refreshing names and
+// reporting status, until Close.
 func (a *Archiver) Start(ctx context.Context) {
-	a.ctx = ctx
+	a.ctx, a.cancel = context.WithCancel(ctx)
 	a.wa.AddEventHandler(a.handle)
-	a.media.start(ctx)
-	go a.reportStatus(ctx)
+	a.background(a.media.run)
+	a.background(a.reportStatus)
+	a.background(a.refreshNamesLoop)
+}
+
+func (a *Archiver) background(fn func(context.Context)) {
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		fn(a.ctx)
+	}()
+}
+
+// Close waits for event handlers in flight, stops background work and saves
+// what's pending. Disconnect the client first so no new events arrive.
+func (a *Archiver) Close() {
+	a.handling.Lock()
+	a.closed = true
+	a.handling.Unlock()
+	a.cancel()
+	a.wg.Wait()
+	a.media.flush()
 }
 
 func (a *Archiver) Added() int64 { return a.added.Load() }
@@ -87,31 +115,55 @@ func (a *Archiver) Idle() time.Duration {
 
 func (a *Archiver) touch() { a.lastActivity.Store(time.Now().UnixNano()) }
 
-// PendingMedia is the number of attachments not downloaded yet.
+// PendingMedia is the number of attachments still to download.
 func (a *Archiver) PendingMedia() int { return a.media.len() }
-
-// Flush saves pending state; call it before the process exits.
-func (a *Archiver) Flush() { a.media.flush() }
 
 // WaitMedia blocks until the media queue is drained or ctx ends.
 func (a *Archiver) WaitMedia(ctx context.Context) { a.media.wait(ctx) }
 
 func (a *Archiver) handle(evt any) {
+	a.handling.RLock()
+	defer a.handling.RUnlock()
+	if a.closed {
+		return
+	}
+	ctx := a.ctx
 	switch v := evt.(type) {
 	case *events.Message:
 		a.names.notePush(v.Info.Sender.String(), v.Info.PushName)
-		pm := wa.ParseLiveMessage(v)
-		a.archiveMessage(a.ctx, pm, nil)
+		a.archiveMessage(ctx, nil, wa.ParseLiveMessage(v), "")
 	case *events.HistorySync:
-		a.archiveHistory(a.ctx, v.Data)
+		a.archiveHistory(ctx, v.Data)
 	case *events.PushName:
 		a.names.notePush(v.JID.String(), v.NewPushName)
+		a.nameChanged()
+	case *events.Contact:
+		a.nameChanged()
 	case *events.GroupInfo:
-		a.archiveGroupInfo(a.ctx, v)
+		a.archiveGroupInfo(ctx, v)
 	case *events.MediaRetry:
 		a.media.onRetry(v)
-	case *events.Connected, *events.Disconnected, *events.LoggedOut:
+	case *events.Connected:
 		a.trackConnection(v)
+		a.nameChanged()
+	case *events.Disconnected, *events.LoggedOut:
+		a.trackConnection(v)
+	}
+}
+
+// batch collects the writes of one history chunk: every chat it touches is
+// held and written once at the end. A nil batch writes through.
+type batch struct {
+	held map[string]*archive.Chat
+}
+
+func (b *batch) use(c *archive.Chat) {
+	if b == nil {
+		return
+	}
+	if _, ok := b.held[c.JID()]; !ok {
+		c.Hold()
+		b.held[c.JID()] = c
 	}
 }
 
@@ -122,23 +174,12 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 	for _, p := range data.GetPushnames() {
 		a.names.notePush(p.GetID(), p.GetPushname())
 	}
-	onDemand := data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND
-	before := a.added.Load()
-	type delivery struct {
-		chat  string
-		batch historyBatch
+	if len(data.GetPushnames()) > 0 {
+		a.nameChanged()
 	}
-	var deliveries []delivery
-	a.ar.BeginBatch()
-	defer func() {
-		if err := a.ar.EndBatch(); err != nil {
-			a.logf("warning: archive write failed: %v", err)
-		}
-		// A waiting backfill reads the chat, so tell it only once written.
-		for _, d := range deliveries {
-			a.deliverBackfill(d.chat, d.batch)
-		}
-	}()
+	before := a.added.Load()
+	b := &batch{held: map[string]*archive.Chat{}}
+	pages := map[string]historyBatch{}
 	for _, conv := range data.GetConversations() {
 		chatID := strings.TrimSpace(conv.GetID())
 		if chatID == "" {
@@ -148,14 +189,13 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		if hint == "" {
 			hint = conv.GetDisplayName()
 		}
-		var batch historyBatch
+		var page historyBatch
 		for _, m := range conv.GetMessages() {
 			web := m.GetMessage()
 			if web == nil {
 				continue
 			}
-			batch.count++
-			a.archiveWeb(ctx, chatID, hint, web)
+			a.archiveWeb(ctx, b, chatID, hint, web)
 			// Pages come in the phone's storage order, which is not always
 			// time order; the next page starts after the last message here.
 			key := web.GetKey()
@@ -163,10 +203,19 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 			if sender == "" {
 				sender = key.GetParticipant()
 			}
-			batch.last = &archive.Row{ID: key.GetID(), TS: int64(web.GetMessageTimestamp()), FromMe: key.GetFromMe(), Sender: sender}
+			page.last = &archive.Row{ID: key.GetID(), TS: int64(web.GetMessageTimestamp()), FromMe: key.GetFromMe(), Sender: sender}
 		}
-		if onDemand {
-			deliveries = append(deliveries, delivery{chatID, batch})
+		pages[chatID] = page
+	}
+	for _, c := range b.held {
+		if err := c.Release(); err != nil {
+			a.logf("warning: writing %s: %v", c.Name(), err)
+		}
+	}
+	if data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+		// A waiting backfill reads the chat, so tell it only once written.
+		for chatID, page := range pages {
+			a.deliverBackfill(chatID, page)
 		}
 	}
 	if n := a.added.Load() - before; n > 0 {
@@ -174,46 +223,41 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 	}
 }
 
-// archiveWeb stores one history message and returns its bookkeeping row,
-// whether or not it was new, so backfill can move its cursor.
-func (a *Archiver) archiveWeb(ctx context.Context, chatID, hint string, web *waWeb.WebMessageInfo) (archive.Row, bool) {
+func (a *Archiver) archiveWeb(ctx context.Context, b *batch, chatID, hint string, web *waWeb.WebMessageInfo) {
 	a.names.notePush(web.GetParticipant(), web.GetPushName())
-	if stub := web.GetMessageStubType(); stub != 0 {
-		return a.archiveStub(ctx, chatID, hint, web)
+	if web.GetMessageStubType() != 0 {
+		a.archiveStub(ctx, b, chatID, hint, web)
+		return
 	}
 	if debug && web.GetMessage() == nil {
 		a.logf("debug: bodiless history record: %s", protojson.Format(web))
 	}
-	pm := wa.ParseHistoryMessage(chatID, web)
-	return a.archiveMessage(ctx, pm, &hint)
+	a.archiveMessage(ctx, b, wa.ParseHistoryMessage(chatID, web), hint)
 }
 
-func (a *Archiver) archiveMessage(ctx context.Context, pm wa.ParsedMessage, hint *string) (archive.Row, bool) {
+func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMessage, hint string) {
 	if pm.ID == "" || pm.Chat.IsEmpty() || skipChat(pm.Chat) {
-		return archive.Row{}, false
+		return
 	}
 	if pm.ReactionToID != "" || pm.ReactionEmoji != "" || pm.PollVote != nil || pm.PollAdd != nil {
-		return archive.Row{}, false
+		return
 	}
 	if !pm.HasContent() && !pm.Edited && invisiblePayload(pm.UnhandledPayload) {
-		return archive.Row{}, false
+		return
 	}
-	chatHint := ""
-	if hint != nil {
-		chatHint = *hint
-	}
-	c, err := a.chat(ctx, pm.Chat, chatHint)
+	c, err := a.chat(ctx, pm.Chat, hint)
 	if err != nil {
 		a.logf("warning: %v", err)
-		return archive.Row{}, false
+		return
 	}
+	b.use(c)
 	row := archive.Row{ID: pm.ID, TS: pm.Timestamp.Unix(), FromMe: pm.FromMe, Sender: pm.SenderJID}
 
-	if pm.Revoked {
-		a.applyDelete(ctx, c, pm, row)
-		return row, true
-	}
-	if pm.Edited && c.Has(pm.ID) {
+	switch {
+	case pm.Revoked:
+		a.applyDelete(ctx, b, c, pm, row)
+		return
+	case pm.Edited && c.Has(pm.ID):
 		text := a.names.mentions(ctx, pm.Text, pm.MentionedJIDs)
 		_, err := c.Update(pm.ID, func(e *archive.Entry, _ int) bool {
 			if e.Deleted != "" || (e.Text == text && e.Edited) {
@@ -222,19 +266,21 @@ func (a *Archiver) archiveMessage(ctx context.Context, pm wa.ParsedMessage, hint
 			e.Text, e.Edited = text, true
 			return true
 		})
-		a.changed(err)
-		return row, true
-	}
-	if c.Has(pm.ID) {
-		return row, true
+		a.wrote(b, c, err)
+		return
+	case c.Has(pm.ID):
+		return
 	}
 
 	if !pm.HasContent() && pm.UnhandledPayload != "" {
 		a.unrendered(pm.UnhandledPayload)
 	}
 	sender := a.senderName(ctx, pm)
+	if a.isFallbackSender(pm, sender) {
+		a.needsNames(c.JID())
+	}
+	e := a.entryFor(ctx, pm, sender)
 	_, inserted, err := c.Insert(row, func(pos int) archive.Entry {
-		e := a.entryFor(ctx, pm, sender)
 		if pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type) {
 			e.Omitted = archive.OmittedText(pm.Media.Type)
 			name := archive.AttachmentName(pos, pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename)
@@ -245,28 +291,33 @@ func (a *Archiver) archiveMessage(ctx context.Context, pm wa.ParsedMessage, hint
 	if inserted {
 		a.added.Add(1)
 	}
-	a.changed(err)
-	return row, true
+	a.wrote(b, c, err)
 }
 
-// unrendered notes, once per type, a message kind written as an empty entry
-// because wacli can't render it yet.
-func (a *Archiver) unrendered(payload string) {
-	a.waitMu.Lock()
-	seen := a.seenPayload[payload]
-	a.seenPayload[payload] = true
-	a.waitMu.Unlock()
-	if !seen {
-		a.logf("note: %s messages are archived as empty entries (not rendered yet)", payload)
+// wrote finishes a write: outside a history batch it makes sure the change
+// is on disk (the chat may be held by a batch on another goroutine) before
+// WhatsApp gets its acknowledgement.
+func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) {
+	if err == nil && b == nil {
+		err = c.Flush()
 	}
-}
-
-func (a *Archiver) changed(err error) {
 	if err != nil {
 		a.logf("warning: archive write failed: %v", err)
 		return
 	}
 	a.touch()
+}
+
+// unrendered notes, once per type, a message kind written as an empty entry
+// because wacli can't render it yet.
+func (a *Archiver) unrendered(payload string) {
+	a.mu.Lock()
+	seen := a.seenPayload[payload]
+	a.seenPayload[payload] = true
+	a.mu.Unlock()
+	if !seen {
+		a.logf("note: %s messages are archived as empty entries (not rendered yet)", payload)
+	}
 }
 
 func (a *Archiver) senderName(ctx context.Context, pm wa.ParsedMessage) string {
@@ -281,6 +332,19 @@ func (a *Archiver) senderName(ctx context.Context, pm wa.ParsedMessage) string {
 		sender = pm.Chat
 	}
 	return a.names.contact(ctx, sender)
+}
+
+func (a *Archiver) isFallbackSender(pm wa.ParsedMessage, sender string) bool {
+	if pm.FromMe {
+		return sender == ownFallback
+	}
+	return IsFallbackName(sender, pm.SenderJID)
+}
+
+func (a *Archiver) needsNames(jid string) {
+	if err := a.ar.UpdateInfo(jid, func(ci *archive.ChatInfo) { ci.NeedsNames = true }); err != nil {
+		a.logf("warning: %v", err)
+	}
 }
 
 func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender string) archive.Entry {
@@ -342,20 +406,21 @@ func formatDuration(secs int64) string {
 	}
 }
 
-func (a *Archiver) applyDelete(ctx context.Context, c *archive.Chat, pm wa.ParsedMessage, row archive.Row) {
+func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, pm wa.ParsedMessage, row archive.Row) {
 	text := archive.DeletedByThem
 	if pm.FromMe {
 		text = archive.DeletedByMe
 	}
 	if !c.Has(pm.ID) {
 		// The original never reached us; keep the tombstone at deletion time.
+		sender := a.senderName(ctx, pm)
 		_, inserted, err := c.Insert(row, func(int) archive.Entry {
-			return archive.Entry{Sender: a.senderName(ctx, pm), Deleted: text}
+			return archive.Entry{Sender: sender, Deleted: text}
 		})
 		if inserted {
 			a.added.Add(1)
 		}
-		a.changed(err)
+		a.wrote(b, c, err)
 		return
 	}
 	var attachment string
@@ -367,13 +432,14 @@ func (a *Archiver) applyDelete(ctx context.Context, c *archive.Chat, pm wa.Parse
 		*e = archive.Entry{Time: e.Time, Sender: e.Sender, Deleted: text}
 		return true
 	})
-	a.changed(err)
+	a.wrote(b, c, err)
 	a.media.forget(c.JID(), pm.ID)
 	if attachment != "" {
 		// Exports don't contain media of deleted messages; keep it aside.
-		dst := filepath.Join(a.ar.Root(), ".wacli", "deleted", filepath.Base(c.Dir()))
+		dir := c.Dir()
+		dst := filepath.Join(a.ar.Root(), ".wacli", "deleted", filepath.Base(dir))
 		if err := os.MkdirAll(dst, 0o700); err == nil {
-			_ = os.Rename(filepath.Join(c.Dir(), attachment), filepath.Join(dst, attachment))
+			_ = os.Rename(filepath.Join(dir, attachment), filepath.Join(dst, attachment))
 		}
 	}
 }
@@ -390,99 +456,24 @@ func (a *Archiver) chat(ctx context.Context, jid types.JID, hint string) (*archi
 	c, created, err := a.ar.EnsureChat(key, name, kind, suffix)
 	if err == nil && created {
 		a.logf("new chat: %s", filepath.Base(c.Dir()))
+		if IsFallbackName(name, key) {
+			a.needsNames(key)
+		}
 	}
 	return c, err
 }
 
+// chatKind returns the chat's kind and the suffix that tells its folder apart
+// from another chat's with the same name (a number for people; groups get
+// "(2)", "(3)", …).
 func chatKind(jid types.JID) (kind, suffix string) {
 	switch jid.Server {
 	case types.GroupServer:
-		return "group", "group"
+		return "group", ""
 	case types.DefaultUserServer:
 		return "dm", "+" + jid.User
 	}
 	return "dm", ""
-}
-
-// RefreshNames renames chats still named by number or ID once WhatsApp has
-// told us their real name (contacts and group subjects arrive after the first
-// history batches on a new link).
-func (a *Archiver) RefreshNames(ctx context.Context) int {
-	renamed := 0
-	resolved := map[string]string{} // sender JID → name, for this pass
-	for _, info := range a.ar.Chats() {
-		if ctx.Err() != nil {
-			break
-		}
-		a.refreshSenders(ctx, info.JID, resolved)
-		if strings.IndexFunc(info.Folder, archive.IsBidiMark) >= 0 || archive.CleanName(info.Name) != info.Name {
-			// Folders made before marks and line breaks were cleaned out.
-			jid, _ := types.ParseJID(info.JID)
-			_, suffix := chatKind(jid)
-			if folder, err := a.ar.Rename(info.JID, archive.CleanName(info.Name), suffix); err == nil {
-				a.logf("renamed %s → %s", info.Folder, folder)
-				renamed++
-			}
-		}
-		if !IsFallbackName(info.Name, info.JID) {
-			continue
-		}
-		jid, err := types.ParseJID(info.JID)
-		if err != nil {
-			continue
-		}
-		name := a.names.chat(ctx, jid, "")
-		if IsFallbackName(name, info.JID) || name == info.Name {
-			continue
-		}
-		_, suffix := chatKind(jid)
-		folder, err := a.ar.Rename(info.JID, name, suffix)
-		if err != nil {
-			a.logf("warning: rename %s: %v", info.Folder, err)
-			continue
-		}
-		a.logf("renamed %s → %s", info.Folder, folder)
-		renamed++
-	}
-	return renamed
-}
-
-// refreshSenders replaces senders written as a number before the contact's
-// name was known.
-func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved map[string]string) {
-	c, err := a.ar.Chat(chatJID)
-	if err != nil {
-		return
-	}
-	own := a.names.own()
-	n, err := c.RenameSenders(func(row archive.Row, sender string) (string, bool) {
-		if clean := archive.CleanName(sender); clean != sender {
-			return clean, true // re-rendering also cleans it
-		}
-		if row.FromMe {
-			// Written as "You" before the profile name synced to this link.
-			return own, sender == "You" && own != "You"
-		}
-		if row.Sender == "" || !IsFallbackName(sender, row.Sender) {
-			return "", false
-		}
-		name, ok := resolved[row.Sender]
-		if !ok {
-			if jid, err := types.ParseJID(row.Sender); err == nil {
-				name = a.names.contact(ctx, jid)
-			}
-			resolved[row.Sender] = name
-		}
-		if name == "" || IsFallbackName(strings.TrimPrefix(name, "~\u202f"), row.Sender) {
-			return "", false
-		}
-		return name, true
-	})
-	if err != nil {
-		a.logf("warning: %v", err)
-	} else if n > 0 {
-		a.logf("named %d senders in %s", n, filepath.Base(c.Dir()))
-	}
 }
 
 // canonical keys DMs by phone number when WhatsApp tells us the mapping, so
@@ -534,5 +525,5 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		},
 		Message: msg,
 	}
-	a.archiveMessage(ctx, wa.ParseLiveMessage(evt), nil)
+	a.archiveMessage(ctx, nil, wa.ParseLiveMessage(evt), "")
 }

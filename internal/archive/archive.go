@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -23,11 +22,17 @@ const (
 	folderStart = "WhatsApp Chat - "
 )
 
+// ErrReadOnly is returned by writes on an archive opened ReadOnly.
+var ErrReadOnly = errors.New("archive opened read-only")
+
 type Options struct {
 	Root       string
 	DateFormat string
 	Location   *time.Location
 	Logf       func(format string, args ...any)
+	// ReadOnly never writes: repairs happen in memory only. For commands
+	// that run next to the sync process that owns the files.
+	ReadOnly bool
 }
 
 // Row is the bookkeeping kept for each entry: what WhatsApp needs to refer to
@@ -44,60 +49,24 @@ type ChatInfo struct {
 	JID    string `json:"-"`
 	Folder string `json:"folder"`
 	Name   string `json:"name"`
-	Kind   string `json:"kind"` // dm | group | broadcast | newsletter
-	// Backfill is the oldest message of the newest contiguous run fetched
-	// from the phone; older history is requested from here.
+	Kind   string `json:"kind"` // dm | group
+	// Backfill is where the next history request starts: the last message of
+	// the previous page, in the phone's order.
 	Backfill     *Row `json:"backfill,omitempty"`
 	BackfillDone bool `json:"backfill_done,omitempty"`
+	// NeedsNames marks chats with a name or senders written as a number
+	// because the real name wasn't known yet.
+	NeedsNames bool `json:"needs_names,omitempty"`
+	// PrevFolder is set while a rename is in flight; Open finishes it.
+	PrevFolder string `json:"prev_folder,omitempty"`
 }
 
 type Archive struct {
-	batch   atomic.Int32
-	opts    Options
-	mu      sync.Mutex
-	meta    map[string]*ChatInfo
-	chats   map[string]*Chat
-	repairs []string // folders whose index was rebuilt this run
-}
-
-// BeginBatch holds back file writes until the matching EndBatch, so a history
-// sync that inserts thousands of older messages writes each chat once instead
-// of once per message. Batches nest.
-func (a *Archive) BeginBatch() { a.batch.Add(1) }
-
-// EndBatch writes every chat changed during the batch.
-func (a *Archive) EndBatch() error {
-	if a.batch.Add(-1) > 0 {
-		return nil
-	}
-	a.mu.Lock()
-	chats := make([]*Chat, 0, len(a.chats))
-	for _, c := range a.chats {
-		chats = append(chats, c)
-	}
-	a.mu.Unlock()
-	var first error
-	for _, c := range chats {
-		c.mu.Lock()
-		if c.dirty {
-			if err := c.rewriteLocked(); err != nil && first == nil {
-				first = err
-			}
-			c.dirty = false
-		}
-		c.mu.Unlock()
-	}
-	return first
-}
-
-func (a *Archive) batching() bool { return a.batch.Load() > 0 }
-
-// Repairs lists chats whose index had to be rebuilt since the archive was
-// opened.
-func (a *Archive) Repairs() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]string(nil), a.repairs...)
+	opts     Options
+	mu       sync.Mutex
+	meta     map[string]*ChatInfo
+	chats    map[string]*Chat
+	problems []string // found while opening chats; see Problems
 }
 
 func Open(opts Options) (*Archive, error) {
@@ -113,8 +82,10 @@ func Open(opts Options) (*Archive, error) {
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
 	}
-	if err := os.MkdirAll(filepath.Join(opts.Root, metaDir, indexDir), 0o700); err != nil {
-		return nil, err
+	if !opts.ReadOnly {
+		if err := os.MkdirAll(filepath.Join(opts.Root, metaDir, indexDir), 0o700); err != nil {
+			return nil, err
+		}
 	}
 	a := &Archive{opts: opts, meta: map[string]*ChatInfo{}, chats: map[string]*Chat{}}
 	data, err := os.ReadFile(a.metaPath(chatsFile))
@@ -130,14 +101,47 @@ func Open(opts Options) (*Archive, error) {
 	for jid, info := range a.meta {
 		info.JID = jid
 	}
-	return a, nil
+	return a, a.finishRenames()
 }
 
-func (a *Archive) Root() string       { return a.opts.Root }
-func (a *Archive) DateFormat() string { return a.opts.DateFormat }
+// finishRenames completes folder renames a crash interrupted.
+func (a *Archive) finishRenames() error {
+	changed := false
+	for _, info := range a.meta {
+		if info.PrevFolder == "" {
+			continue
+		}
+		if !exists(a.path(info.Folder)) && exists(a.path(info.PrevFolder)) {
+			if a.opts.ReadOnly {
+				info.Folder = info.PrevFolder
+				continue
+			}
+			if err := os.Rename(a.path(info.PrevFolder), a.path(info.Folder)); err != nil {
+				return err
+			}
+		}
+		info.PrevFolder = ""
+		changed = true
+	}
+	if changed && !a.opts.ReadOnly {
+		return a.saveMetaLocked()
+	}
+	return nil
+}
 
-func (a *Archive) metaPath(parts ...string) string {
-	return filepath.Join(append([]string{a.opts.Root, metaDir}, parts...)...)
+func (a *Archive) Root() string              { return a.opts.Root }
+func (a *Archive) DateFormat() string        { return a.opts.DateFormat }
+func (a *Archive) Location() *time.Location  { return a.opts.Location }
+func (a *Archive) path(folder string) string { return filepath.Join(a.opts.Root, folder) }
+func (a *Archive) metaPath(p ...string) string {
+	return filepath.Join(append([]string{a.opts.Root, metaDir}, p...)...)
+}
+
+// Problems lists what opening chats found and fixed or worked around.
+func (a *Archive) Problems() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.problems...)
 }
 
 // Chats lists known chats sorted by folder name.
@@ -162,15 +166,22 @@ func (a *Archive) Info(jid string) (ChatInfo, bool) {
 	return *info, true
 }
 
-// UpdateInfo changes a chat's record (name, backfill cursor) and saves it.
+// UpdateInfo changes a chat's record (backfill cursor, flags) and saves it.
 func (a *Archive) UpdateInfo(jid string, fn func(*ChatInfo)) error {
+	if a.opts.ReadOnly {
+		return ErrReadOnly
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	info, ok := a.meta[jid]
 	if !ok {
 		return fmt.Errorf("unknown chat %s", jid)
 	}
+	before := *info
 	fn(info)
+	if *info == before {
+		return nil
+	}
 	return a.saveMetaLocked()
 }
 
@@ -214,8 +225,11 @@ func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error
 		c, err := a.chatLocked(jid)
 		return c, false, err
 	}
-	folder := a.freeFolderLocked(name, suffix, jid)
-	if err := os.MkdirAll(filepath.Join(a.opts.Root, folder), 0o700); err != nil {
+	if a.opts.ReadOnly {
+		return nil, false, ErrReadOnly
+	}
+	folder := a.freeFolderLocked(name, suffix, jid, "")
+	if err := os.MkdirAll(a.path(folder), 0o700); err != nil {
 		return nil, false, err
 	}
 	a.meta[jid] = &ChatInfo{JID: jid, Folder: folder, Name: name, Kind: kind}
@@ -226,19 +240,23 @@ func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error
 	return c, true, err
 }
 
-func (a *Archive) freeFolderLocked(name, suffix, jid string) string {
+// freeFolderLocked picks a folder name for name that no other chat or file
+// uses; own is the chat's current folder, which doesn't count as taken.
+func (a *Archive) freeFolderLocked(name, suffix, jid, own string) string {
 	base := folderStart + strings.TrimSpace(sanitizeFileName(name))
 	if strings.TrimSpace(name) == "" {
 		base = folderStart + strings.SplitN(jid, "@", 2)[0]
 	}
 	taken := func(f string) bool {
+		if strings.EqualFold(f, own) {
+			return false
+		}
 		for _, info := range a.meta {
 			if strings.EqualFold(info.Folder, f) {
 				return true
 			}
 		}
-		_, err := os.Stat(filepath.Join(a.opts.Root, f))
-		return err == nil
+		return exists(a.path(f))
 	}
 	if !taken(base) {
 		return base
@@ -255,56 +273,141 @@ func (a *Archive) freeFolderLocked(name, suffix, jid string) string {
 	}
 }
 
-// Chat is one export folder. Methods are safe for concurrent use.
+// Rename gives a chat a new name and moves its folder to match. System
+// entries, which exports attribute to the chat itself, follow the new name.
+// The chat stays locked throughout, so no write lands in the old folder.
+func (a *Archive) Rename(jid, name, suffix string) (string, error) {
+	if a.opts.ReadOnly {
+		return "", ErrReadOnly
+	}
+	c, err := a.Chat(jid)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	a.mu.Lock()
+	info := a.meta[jid]
+	oldName, oldFolder := info.Name, info.Folder
+	folder := a.freeFolderLocked(name, suffix, jid, oldFolder)
+	if folder != oldFolder {
+		// Record the move first: if it's interrupted, Open finishes it.
+		info.Folder, info.PrevFolder = folder, oldFolder
+		if err := a.saveMetaLocked(); err != nil {
+			info.Folder, info.PrevFolder = oldFolder, ""
+			a.mu.Unlock()
+			return "", err
+		}
+		err := os.Rename(a.path(oldFolder), a.path(folder))
+		if errors.Is(err, os.ErrNotExist) {
+			err = os.MkdirAll(a.path(folder), 0o700)
+		}
+		if err != nil {
+			info.Folder, info.PrevFolder = oldFolder, ""
+			_ = a.saveMetaLocked()
+			a.mu.Unlock()
+			return "", err
+		}
+		info.PrevFolder = ""
+	}
+	info.Name = name
+	err = a.saveMetaLocked()
+	a.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+
+	changed := false
+	for i, raw := range c.entries {
+		for _, old := range []string{oldName, CleanName(oldName)} {
+			if renamed, ok := renameSystemSender(raw, old, name); ok {
+				c.entries[i], changed = renamed, true
+				break
+			}
+		}
+	}
+	if changed {
+		return folder, c.saveLocked()
+	}
+	return folder, nil
+}
+
+// Chat is one export folder. Methods are safe for concurrent use; the
+// in-memory entries are authoritative and the files follow them.
 type Chat struct {
 	a       *Archive
-	info    *ChatInfo
+	info    *ChatInfo // Folder and Name change only under mu (and a.mu)
 	mu      sync.Mutex
 	rows    []Row
 	entries []string
 	byID    map[string]int
-	dirty   bool // changed during a batch, not written yet
+	hold    int  // >0 while a batch of writes is being collected
+	dirty   bool // memory has changes the files don't
 }
 
-func (c *Chat) JID() string  { return c.info.JID }
-func (c *Chat) Dir() string  { return filepath.Join(c.a.opts.Root, c.info.Folder) }
-func (c *Chat) Name() string { return c.info.Name }
+func (c *Chat) JID() string { return c.info.JID }
 
-func (c *Chat) chatPath() string  { return filepath.Join(c.Dir(), ChatFile) }
+func (c *Chat) Dir() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dirLocked()
+}
+
+func (c *Chat) Name() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.info.Name
+}
+
+func (c *Chat) dirLocked() string { return c.a.path(c.info.Folder) }
+func (c *Chat) chatPath() string  { return filepath.Join(c.dirLocked(), ChatFile) }
 func (c *Chat) indexPath() string { return c.a.metaPath(indexDir, indexFileName(c.info.JID)) }
-
 func indexFileName(jid string) string {
 	return strings.NewReplacer("/", "_", ":", "_").Replace(jid) + ".tsv"
 }
 
+func (c *Chat) problem(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	c.a.problems = append(c.a.problems, msg) // load runs under a.mu
+	c.a.opts.Logf("%s", msg)
+}
+
 func (c *Chat) load() error {
 	data, err := os.ReadFile(c.chatPath())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
 		return err
 	}
 	c.entries = SplitEntries(string(data))
-	c.rows, err = readIndex(c.indexPath())
-	if err != nil {
+	if c.rows, err = readIndex(c.indexPath()); err != nil {
 		return err
 	}
-	// Appends write the index row first; a crash before the entry leaves one
-	// extra row, which is safe to drop.
-	if len(c.rows) == len(c.entries)+1 {
-		c.rows = c.rows[:len(c.entries)]
-		if err := c.writeIndex(); err != nil {
-			return err
+	if missing && len(c.rows) > 0 {
+		// The folder was moved or deleted outside wacli. Keep the old index
+		// aside and start the chat over, so new messages still land.
+		c.problem("%s: _chat.txt was missing; started it again (old index kept as %s.orphaned)", c.info.Folder, filepath.Base(c.indexPath()))
+		if !c.a.opts.ReadOnly {
+			if err := os.Rename(c.indexPath(), fmt.Sprintf("%s.orphaned-%d", c.indexPath(), time.Now().Unix())); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
+				return err
+			}
 		}
+		c.rows = nil
 	}
 	if len(c.rows) != len(c.entries) {
-		// A crash between writing _chat.txt and its index, or a hand edit.
-		// Never refuse the chat: that would drop every new message for it.
+		// A crash between writing _chat.txt and its index, a failed write,
+		// or a hand edit. Never refuse the chat: new messages must land.
 		before := len(c.rows)
 		c.rows = realign(c.entries, c.rows, c.a.opts.DateFormat, c.a.opts.Location)
-		if err := c.writeIndex(); err != nil {
-			return err
+		c.problem("%s: index rebuilt (%d entries, had %d rows)", c.info.Folder, len(c.entries), before)
+		if !c.a.opts.ReadOnly {
+			if err := c.writeIndex(); err != nil {
+				return err
+			}
 		}
-		c.a.repairs = append(c.a.repairs, c.info.Folder)
-		c.a.opts.Logf("repaired index of %s (%d entries, had %d rows)", c.info.Folder, len(c.entries), before)
 	}
 	c.reindex()
 	return nil
@@ -388,10 +491,44 @@ func (c *Chat) Get(id string) (Entry, int, bool) {
 	return e, i, true
 }
 
+// Hold collects writes in memory until the matching Release, so inserting
+// thousands of older messages writes the chat once. Holds nest.
+func (c *Chat) Hold() {
+	c.mu.Lock()
+	c.hold++
+	c.mu.Unlock()
+}
+
+// Release ends a Hold and writes what it collected.
+func (c *Chat) Release() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hold--
+	if c.hold > 0 || !c.dirty {
+		return nil
+	}
+	return c.flushLocked()
+}
+
+// Flush writes pending changes now, even during a Hold. Writers that need
+// their change on disk before acknowledging it (live messages, finished
+// downloads) call it.
+func (c *Chat) Flush() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.dirty {
+		return nil
+	}
+	return c.flushLocked()
+}
+
 // Insert adds a message in timestamp order. build receives the entry's
-// position (attachment names depend on it). Inserting a known ID is a no-op
-// that reports inserted=false.
+// position (attachment names depend on it) and runs with the chat locked.
+// Inserting a known ID is a no-op that reports inserted=false.
 func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted bool, err error) {
+	if c.a.opts.ReadOnly {
+		return 0, false, ErrReadOnly
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if i, ok := c.byID[row.ID]; ok {
@@ -401,7 +538,7 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 	e := build(pos)
 	e.Time = time.Unix(row.TS, 0).In(c.a.opts.Location)
 	text := Render(e, c.a.opts.DateFormat)
-	if pos == len(c.rows) && !c.a.batching() {
+	if pos == len(c.rows) && c.hold == 0 && !c.dirty {
 		return pos, true, c.appendLocked(row, text)
 	}
 	c.rows = append(c.rows[:pos], append([]Row{row}, c.rows[pos:]...)...)
@@ -410,21 +547,29 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 	return pos, true, c.saveLocked()
 }
 
+// appendLocked is the fast path for the newest message: two appends. If
+// either fails, the files are rewritten from memory instead, so a partial
+// append can't leave the index and _chat.txt out of step.
 func (c *Chat) appendLocked(row Row, text string) error {
-	if err := appendFile(c.indexPath(), formatRow(row)); err != nil {
-		return err
-	}
-	if err := appendFile(c.chatPath(), text+EntrySep); err != nil {
-		return err
+	err := appendFile(c.indexPath(), formatRow(row))
+	if err == nil {
+		err = appendFile(c.chatPath(), text+EntrySep)
 	}
 	c.rows = append(c.rows, row)
 	c.entries = append(c.entries, text)
 	c.byID[row.ID] = len(c.rows) - 1
+	if err != nil {
+		c.dirty = true
+		return c.flushLocked()
+	}
 	return nil
 }
 
 // Update rewrites the entry for id. fn returns false to leave it unchanged.
 func (c *Chat) Update(id string, fn func(e *Entry, pos int) bool) (bool, error) {
+	if c.a.opts.ReadOnly {
+		return false, ErrReadOnly
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	i, ok := c.byID[id]
@@ -442,16 +587,47 @@ func (c *Chat) Update(id string, fn func(e *Entry, pos int) bool) (bool, error) 
 	return true, c.saveLocked()
 }
 
-// saveLocked writes the chat now, or at the end of the current batch.
-func (c *Chat) saveLocked() error {
-	if c.a.batching() {
-		c.dirty = true
-		return nil
+// RenameSenders rewrites the sender name of entries for which name returns a
+// new one; it gets each entry's bookkeeping row and current sender name.
+func (c *Chat) RenameSenders(name func(row Row, sender string) (string, bool)) (int, error) {
+	if c.a.opts.ReadOnly {
+		return 0, ErrReadOnly
 	}
-	return c.rewriteLocked()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for i, raw := range c.entries {
+		e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location)
+		if err != nil || e.System {
+			continue
+		}
+		if newName, ok := name(c.rows[i], e.Sender); ok && newName != e.Sender {
+			e.Sender = newName
+			c.entries[i] = Render(e, c.a.opts.DateFormat)
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return n, c.saveLocked()
 }
 
-func (c *Chat) rewriteLocked() error {
+// saveLocked writes the chat now, or at Release during a Hold.
+func (c *Chat) saveLocked() error {
+	c.dirty = true
+	if c.hold > 0 {
+		return nil
+	}
+	return c.flushLocked()
+}
+
+// flushLocked rewrites both files from memory. On failure the chat stays
+// dirty, so the next write tries again with everything.
+func (c *Chat) flushLocked() error {
+	if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
+		return err
+	}
 	var b strings.Builder
 	for _, e := range c.entries {
 		b.WriteString(e)
@@ -460,7 +636,11 @@ func (c *Chat) rewriteLocked() error {
 	if err := writeFileAtomic(c.chatPath(), []byte(b.String())); err != nil {
 		return err
 	}
-	return c.writeIndex()
+	if err := c.writeIndex(); err != nil {
+		return err
+	}
+	c.dirty = false
+	return nil
 }
 
 func (c *Chat) writeIndex() error {
@@ -505,6 +685,11 @@ func readIndex(path string) ([]Row, error) {
 	return rows, sc.Err()
 }
 
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func appendFile(path, s string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -537,78 +722,4 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
-}
-
-func (a *Archive) Location() *time.Location { return a.opts.Location }
-
-// Rename gives a chat a new name and moves its folder to match. System
-// entries, which exports attribute to the chat itself, follow the new name.
-// The chat stays locked throughout, so no write lands in the old folder.
-func (a *Archive) Rename(jid, name, suffix string) (string, error) {
-	c, err := a.Chat(jid)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	a.mu.Lock()
-	info := a.meta[jid]
-	oldName, oldFolder := info.Name, info.Folder
-	delete(a.meta, jid) // its own folder doesn't count as taken
-	folder := a.freeFolderLocked(name, suffix, jid)
-	a.meta[jid] = info
-	if strings.EqualFold(folder, oldFolder) {
-		folder = oldFolder
-	}
-	if folder != oldFolder {
-		if err := os.Rename(filepath.Join(a.opts.Root, oldFolder), filepath.Join(a.opts.Root, folder)); err != nil {
-			a.mu.Unlock()
-			return "", err
-		}
-	}
-	info.Name, info.Folder = name, folder
-	err = a.saveMetaLocked()
-	a.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-
-	changed := false
-	for i, raw := range c.entries {
-		e, err := Parse(raw, a.opts.DateFormat, a.opts.Location)
-		if err != nil || !e.System || CleanName(e.Sender) != CleanName(oldName) {
-			continue
-		}
-		e.Sender = name
-		c.entries[i] = Render(e, a.opts.DateFormat)
-		changed = true
-	}
-	if changed {
-		return folder, c.saveLocked()
-	}
-	return folder, nil
-}
-
-// RenameSenders rewrites the sender name of entries for which name returns a
-// new one; it gets each entry's bookkeeping row and current sender name.
-func (c *Chat) RenameSenders(name func(row Row, sender string) (string, bool)) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n := 0
-	for i, raw := range c.entries {
-		e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location)
-		if err != nil || e.System {
-			continue
-		}
-		if newName, ok := name(c.rows[i], e.Sender); ok && newName != e.Sender {
-			e.Sender = newName
-			c.entries[i] = Render(e, c.a.opts.DateFormat)
-			n++
-		}
-	}
-	if n == 0 {
-		return 0, nil
-	}
-	return n, c.saveLocked()
 }

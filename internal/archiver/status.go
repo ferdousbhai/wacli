@@ -24,7 +24,7 @@ type Status struct {
 	LoggedOutAt   time.Time `json:"logged_out_at,omitzero"`
 	NewMessages   int64     `json:"new_messages"`
 	PendingMedia  int       `json:"pending_media"`
-	RepairedChats []string  `json:"repaired_chats,omitempty"`
+	Problems      []string  `json:"problems,omitempty"`
 }
 
 func StatusPath(archiveRoot string) string {
@@ -75,13 +75,13 @@ func (a *Archiver) LoggedOut() <-chan struct{} { return a.status.loggedOut }
 func (a *Archiver) writeStatus() {
 	t := a.status
 	t.mu.Lock()
+	defer t.mu.Unlock() // also serializes writers of the file
 	t.s.UpdatedAt = time.Now()
 	t.s.LastArchived = time.Unix(0, a.lastActivity.Load())
 	t.s.NewMessages = a.added.Load()
 	t.s.PendingMedia = a.media.len()
-	t.s.RepairedChats = a.ar.Repairs()
+	t.s.Problems = a.ar.Problems()
 	data, err := json.MarshalIndent(t.s, "", "  ")
-	t.mu.Unlock()
 	if err != nil {
 		return
 	}

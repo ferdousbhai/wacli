@@ -295,7 +295,7 @@ func TestRefreshNamesFixesNumberSenders(t *testing.T) {
 	c.Insert(archive.Row{ID: "M1", TS: t0, Sender: dana}, func(int) archive.Entry {
 		return archive.Entry{Sender: "+6281111111111", Text: "U too"}
 	})
-	a.RefreshNames(context.Background())
+	a.RefreshNames(context.Background(), true)
 	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Dana Putri: U too\r\n" {
 		t.Errorf("got %q", got)
 	}
@@ -310,7 +310,7 @@ func TestRefreshNamesFixesOwnName(t *testing.T) {
 	c.Insert(archive.Row{ID: "M1", TS: t0, FromMe: true, Sender: me}, func(int) archive.Entry {
 		return archive.Entry{Sender: "You", Text: "Hello"}
 	})
-	a.RefreshNames(context.Background())
+	a.RefreshNames(context.Background(), true)
 	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Alex: Hello\r\n" {
 		t.Errorf("got %q", got)
 	}
@@ -359,4 +359,65 @@ func TestStatusTracksConnectionAndLogout(t *testing.T) {
 	if st, _ := ReadStatus(ar.Root()); !st.LoggedOut || st.Connected {
 		t.Errorf("status %+v", st)
 	}
+}
+
+func TestLiveMessageLandsWhileHistoryHoldsTheChat(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, dana, "M1", false, t0, text("first")))
+	c, _ := ar.Chat(group)
+	c.Hold() // a history chunk is being processed on another goroutine
+	a.handle(live(group, dana, "M2", false, t0+5, text("live")))
+	if got := chatFile(t, ar, group); !strings.Contains(got, "live") {
+		t.Errorf("live message only in memory: %q", got)
+	}
+	c.Release()
+}
+
+func TestGroupChangeSeenLiveAndInHistoryIsWrittenOnce(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	ownJID, _ := types.ParseJID(me)
+	danaJID, _ := types.ParseJID(dana)
+	a.handle(&events.GroupInfo{JID: mustJID(group), Sender: &danaJID, Timestamp: time.Unix(t0, 0), Join: []types.JID{ownJID}})
+	stub := &waHistorySync.HistorySyncMsg{Message: &waWeb.WebMessageInfo{
+		Key:                   &waCommon.MessageKey{RemoteJID: proto.String(group), ID: proto.String("S1"), Participant: proto.String(dana)},
+		MessageTimestamp:      proto.Uint64(t0),
+		MessageStubType:       waWeb.WebMessageInfo_GROUP_PARTICIPANT_ADD.Enum(),
+		MessageStubParameters: []string{me},
+	}}
+	a.handle(history(waHistorySync.HistorySync_RECENT, group, "Maya", stub))
+	if got := chatFile(t, ar, group); strings.Count(got, "You were added") != 1 {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestSecondBackfillOfSameChatIsRefused(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	a.handle(live(group, dana, "M1", false, t0, text("hi")))
+	a.backfill[group] = nil // one is running
+	if _, err := a.Backfill(context.Background(), group, 50, 1, time.Second); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestChatNamedByNumberIsFlagged(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	stranger := "6289999999999@s.whatsapp.net"
+	a.handle(live(stranger, stranger, "M1", false, t0, text("hello")))
+	info, _ := ar.Info(stranger)
+	if !info.NeedsNames || info.Name != "+6289999999999" {
+		t.Errorf("info %+v", info)
+	}
+	// A name pass with nothing new keeps the flag (the sender is still a number).
+	a.RefreshNames(context.Background(), false)
+	if info, _ := ar.Info(stranger); !info.NeedsNames {
+		t.Error("flag cleared too early")
+	}
+}
+
+func mustJID(s string) types.JID {
+	j, err := types.ParseJID(s)
+	if err != nil {
+		panic(err)
+	}
+	return j
 }

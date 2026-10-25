@@ -173,6 +173,21 @@ var generatedNameRE = regexp.MustCompile(`^\d{8}-(PHOTO|VIDEO|AUDIO|STICKER|GIF)
 
 func isGeneratedMediaName(name string) bool { return generatedNameRE.MatchString(name) }
 
+// renameSystemSender returns raw with its sender replaced, if raw is a system
+// line attributed to oldSender. It matches the known name rather than parsing
+// the line, so a chat name containing ": " works too.
+func renameSystemSender(raw, oldSender, newSender string) (string, bool) {
+	i := strings.Index(raw, "] ")
+	if i < 0 || oldSender == "" {
+		return "", false
+	}
+	rest := raw[i+2:]
+	if !strings.HasPrefix(rest, oldSender+": "+lrm) {
+		return "", false
+	}
+	return raw[:i+2] + CleanName(newSender) + rest[len(oldSender):], true
+}
+
 // SplitEntries splits _chat.txt content into raw entries. A piece that does
 // not start with an entry header continues the previous entry: a message text
 // that itself contained "\r\n" (files written before Render normalized it).
@@ -199,6 +214,21 @@ var mediaKinds = map[string]struct{ label, ext, omitted string }{
 	"gif":     {"GIF", ".mp4", "GIF omitted"},
 	"audio":   {"AUDIO", ".opus", "audio omitted"},
 	"sticker": {"STICKER", ".webp", "sticker omitted"},
+}
+
+// mediaTypeOf maps a generated attachment name back to its media type;
+// anything else is a document.
+func mediaTypeOf(name string) string {
+	m := generatedNameRE.FindStringSubmatch(name)
+	if m == nil {
+		return "document"
+	}
+	for t, k := range mediaKinds {
+		if k.label == m[1] {
+			return t
+		}
+	}
+	return "document"
 }
 
 // AttachmentName returns the file name iOS gives an attachment that is the

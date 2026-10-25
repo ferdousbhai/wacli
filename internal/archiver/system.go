@@ -16,10 +16,10 @@ const e2eNotice = "Messages and calls are end-to-end encrypted. Only people in t
 
 // archiveStub renders the system messages iOS includes in exports. Stub types
 // exports don't show are skipped.
-func (a *Archiver) archiveStub(ctx context.Context, chatID, hint string, web *waWeb.WebMessageInfo) (archive.Row, bool) {
+func (a *Archiver) archiveStub(ctx context.Context, b *batch, chatID, hint string, web *waWeb.WebMessageInfo) {
 	chatJID, err := types.ParseJID(chatID)
 	if err != nil || skipChat(chatJID) {
-		return archive.Row{}, false
+		return
 	}
 	key := web.GetKey()
 	actorJID := web.GetParticipant()
@@ -84,31 +84,35 @@ func (a *Archiver) archiveStub(ctx context.Context, chatID, hint string, web *wa
 	case waWeb.WebMessageInfo_CALL_MISSED_VIDEO:
 		text = "Missed video call, ‎Tap to call back"
 	default:
-		return archive.Row{}, false
+		return
 	}
 	ts := time.Unix(int64(web.GetMessageTimestamp()), 0)
-	return a.archiveSystem(ctx, chatJID, hint, key.GetID(), ts, key.GetFromMe(), actorJID, text)
+	a.archiveSystem(ctx, b, chatJID, hint, key.GetID(), ts, key.GetFromMe(), actorJID, text)
 }
 
-func (a *Archiver) archiveSystem(ctx context.Context, chatJID types.JID, hint, id string, ts time.Time, fromMe bool, sender, text string) (archive.Row, bool) {
+// archiveSystem writes a system line, attributed to the chat as exports do.
+// A group change seen live (made-up ID) and again later in history (real ID)
+// is written once.
+func (a *Archiver) archiveSystem(ctx context.Context, b *batch, chatJID types.JID, hint, id string, ts time.Time, fromMe bool, sender, text string) {
 	if id == "" {
-		return archive.Row{}, false
+		return
 	}
 	c, err := a.chat(ctx, chatJID, hint)
 	if err != nil {
 		a.logf("warning: %v", err)
-		return archive.Row{}, false
+		return
+	}
+	b.use(c)
+	e := archive.Entry{Time: ts, Sender: c.Name(), System: true, Text: text}
+	if c.Has(id) || c.Find(e) {
+		return
 	}
 	row := archive.Row{ID: id, TS: ts.Unix(), FromMe: fromMe, Sender: sender}
-	_, inserted, err := c.Insert(row, func(int) archive.Entry {
-		// Exports attribute system lines to the chat itself.
-		return archive.Entry{Sender: c.Name(), System: true, Text: text}
-	})
+	_, inserted, err := c.Insert(row, func(int) archive.Entry { return e })
 	if inserted {
 		a.added.Add(1)
 	}
-	a.changed(err)
-	return row, true
+	a.wrote(b, c, err)
 }
 
 // archiveGroupInfo records live group changes that exports show.
@@ -128,7 +132,8 @@ func (a *Archiver) archiveGroupInfo(ctx context.Context, v *events.GroupInfo) {
 	}
 	if v.Name != nil {
 		a.names.noteGroup(v.JID.String(), v.Name.Name)
-		a.archiveSystem(ctx, v.JID, v.Name.Name, id("subject"), v.Timestamp, actor == "You", "",
+		a.nameChanged()
+		a.archiveSystem(ctx, nil, v.JID, v.Name.Name, id("subject"), v.Timestamp, actor == "You", "",
 			fmt.Sprintf("%s changed the group name to “%s”", actor, v.Name.Name))
 	}
 	for _, j := range v.Join {
@@ -136,10 +141,10 @@ func (a *Archiver) archiveGroupInfo(ctx context.Context, v *events.GroupInfo) {
 		if a.names.isOwn(j) {
 			text = "You were added"
 		}
-		a.archiveSystem(ctx, v.JID, "", id("join:"+j.User), v.Timestamp, false, "", text)
+		a.archiveSystem(ctx, nil, v.JID, "", id("join:"+j.User), v.Timestamp, false, "", text)
 	}
 	for _, j := range v.Leave {
-		a.archiveSystem(ctx, v.JID, "", id("leave:"+j.User), v.Timestamp, false, "",
+		a.archiveSystem(ctx, nil, v.JID, "", id("leave:"+j.User), v.Timestamp, false, "",
 			fmt.Sprintf("%s left", a.names.contact(ctx, j)))
 	}
 }

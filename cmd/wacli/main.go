@@ -108,11 +108,13 @@ func defaultArchiveDir() string {
 	return filepath.Join(home, "WhatsApp")
 }
 
-func (f *rootFlags) openArchive() (*archive.Archive, error) {
+// openArchive opens the archive; readOnly for commands that may run next to
+// the sync process that owns the files.
+func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
 	if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
 		return nil, fmt.Errorf("--date-format: %w", err)
 	}
-	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local})
+	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local, Logf: logf, ReadOnly: readOnly})
 }
 
 func signalContext() (context.Context, context.CancelFunc) {
