@@ -319,6 +319,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		return
 	case c.Has(pm.ID):
 		a.requeueMedia(c, pm)
+		a.fillBlank(ctx, b, c, pm)
 		return
 	}
 
@@ -608,4 +609,24 @@ func splitDocLabel(e *archive.Entry, file string) {
 	if j := strings.LastIndex(e.Text, file); file != "" && j >= 0 {
 		e.Text, e.DocLabel = strings.TrimSuffix(e.Text[:j], " "), e.Text[j:]
 	}
+}
+
+// fillBlank gives an entry archived empty (by a version that couldn't read
+// its kind) the text of the redelivered message. Media isn't filled in.
+func (a *Archiver) fillBlank(ctx context.Context, b *batch, c *archive.Chat, pm wa.ParsedMessage) {
+	if pm.Media != nil || pm.Edited || !pm.HasContent() {
+		return
+	}
+	fill := a.entryFor(ctx, pm, "")
+	if fill.Text == "" {
+		return
+	}
+	_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
+		if e.Text != "" || e.System || e.Omitted != "" || e.Attachment != "" || e.Deleted != "" {
+			return false
+		}
+		e.Text, e.System = fill.Text, fill.System
+		return true
+	})
+	a.wrote(b, c, err)
 }

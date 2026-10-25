@@ -637,3 +637,14 @@ func TestWrappedHistoryMessagesAndAlbumLikeText(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestRedeliveryFillsAnEntryArchivedEmpty(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	c, _, _ := ar.EnsureChat(group, "Maya", "group", "")
+	c.Insert(archive.Row{ID: "H1", TS: t0, Sender: dana}, func(int) archive.Entry { return archive.Entry{Sender: "Dana Putri"} })
+	wrapped := &waE2E.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: text("disappearing")}}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", web(group, "H1", dana, false, t0, wrapped)))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:33] Dana Putri: disappearing\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
