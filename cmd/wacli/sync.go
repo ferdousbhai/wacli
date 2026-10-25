@@ -92,8 +92,8 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 				return nil
 			case <-s.arc.LoggedOut():
 				return errUnlinked
-			case h := <-s.arc.Halted():
-				return haltErr(h)
+			case <-s.arc.Halted():
+				return haltErr(s.arc.Halt())
 			}
 		},
 	}

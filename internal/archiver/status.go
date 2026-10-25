@@ -51,7 +51,8 @@ type statusTracker struct {
 	s         Status
 	loggedOut chan struct{}
 	once      sync.Once
-	halted    chan Halt
+	halted    chan struct{} // closed on the first halt
+	halt      Halt
 }
 
 // Halt is a disconnect whatsmeow won't recover from; Retry says whether a
@@ -67,7 +68,7 @@ func newStatusTracker(archiveRoot string) *statusTracker {
 	if old, err := ReadStatus(archiveRoot); err == nil {
 		s.LoggedOut, s.LoggedOutAt, s.Halted, s.HaltedAt = old.LoggedOut, old.LoggedOutAt, old.Halted, old.HaltedAt
 	}
-	return &statusTracker{s: s, loggedOut: make(chan struct{}), halted: make(chan Halt, 1)}
+	return &statusTracker{s: s, loggedOut: make(chan struct{}), halted: make(chan struct{})}
 }
 
 func (a *Archiver) trackConnection(evt any) {
@@ -90,18 +91,29 @@ func (a *Archiver) trackConnection(evt any) {
 func (a *Archiver) halt(reason string, retry bool) {
 	t := a.status
 	t.mu.Lock()
-	t.s.Connected, t.s.Halted, t.s.HaltedAt = false, reason, time.Now()
+	first := t.halt.Reason == ""
+	if first {
+		t.halt = Halt{reason, retry}
+		t.s.Connected, t.s.Halted, t.s.HaltedAt = false, reason, time.Now()
+	}
 	t.mu.Unlock()
+	if !first {
+		return
+	}
 	a.logf("stopping: %s", reason)
 	a.writeStatus()
-	select {
-	case t.halted <- Halt{reason, retry}:
-	default: // the first one counts
-	}
+	close(t.halted)
 }
 
-// Halted delivers the first disconnect wacli has to stop for.
-func (a *Archiver) Halted() <-chan Halt { return a.status.halted }
+// Halted is closed on the first disconnect wacli has to stop for; Halt
+// says which.
+func (a *Archiver) Halted() <-chan struct{} { return a.status.halted }
+
+func (a *Archiver) Halt() Halt {
+	a.status.mu.Lock()
+	defer a.status.mu.Unlock()
+	return a.status.halt
+}
 
 // LoggedOut is closed when WhatsApp unlinks this computer.
 func (a *Archiver) LoggedOut() <-chan struct{} { return a.status.loggedOut }

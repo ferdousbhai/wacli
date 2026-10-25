@@ -936,7 +936,7 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 		if err := os.MkdirAll(deletedDir, 0o700); err != nil {
 			return "", err
 		}
-		return "", os.Rename(src, filepath.Join(deletedDir, filepath.Base(want)))
+		return "", os.Rename(src, filepath.Join(deletedDir, freeName(deletedDir, filepath.Base(want))))
 	case e.Attachment != "":
 		return "", os.Remove(src)
 	}
@@ -1070,7 +1070,7 @@ func (c *Chat) moveDeletedLocked() {
 			left = append(left, f)
 			continue
 		}
-		err := os.Rename(filepath.Join(c.dirLocked(), f), filepath.Join(dst, f))
+		err := os.Rename(filepath.Join(c.dirLocked(), f), filepath.Join(dst, freeName(dst, f)))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			left = append(left, f)
 		}
@@ -1250,11 +1250,14 @@ func appendFile(path, s string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(s); err != nil {
-		f.Close()
-		return err
+	_, err = f.WriteString(s)
+	if err == nil {
+		err = f.Sync() // on disk before WhatsApp is told, and before the next write
 	}
-	return f.Close()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // writeFile replaces path atomically, with its temp file in .wacli/tmp so a

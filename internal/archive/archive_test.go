@@ -1202,3 +1202,27 @@ func TestFirstLineTornFirstMultiLineBeforeLF(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestDeletedMediaWithTheSameNameKeepsBoth(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	doc := func(id string, ts int64, content string) {
+		name := AttachmentName(0, "document", time.Unix(ts, 0), "report.pdf")
+		c.Insert(Row{ID: id, TS: ts}, func(int) Entry { return Entry{Sender: "Dana", Omitted: "document omitted"} })
+		src := filepath.Join(a.TmpDir(), id)
+		os.WriteFile(src, []byte(content), 0o600)
+		if _, err := c.PlaceAttachment(id, src, name); err != nil {
+			t.Fatal(err)
+		}
+		c.Flush()
+		if _, err := c.MarkDeleted(id, DeletedByThem); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc("A", 200, "first")
+	doc("B", 100, "second") // older: lands at position 0 too
+	if files, _ := os.ReadDir(c.deletedDirLocked()); len(files) != 2 {
+		t.Errorf("deleted media kept: %d files, want 2", len(files))
+	}
+}

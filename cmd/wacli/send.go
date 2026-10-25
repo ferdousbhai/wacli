@@ -78,6 +78,9 @@ func printResult(f *rootFlags, res any, err error) error {
 }
 
 func doSend(ctx context.Context, s *session, r request) (any, error) {
+	if err := s.waitLoggedIn(ctx); err != nil { // also in a sync that is reconnecting
+		return nil, err
+	}
 	to, err := resolveChat(s.ar, r.To)
 	if err != nil {
 		return nil, err

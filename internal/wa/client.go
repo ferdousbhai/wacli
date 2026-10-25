@@ -224,7 +224,11 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 	}
 
 	if authed {
-		sendInitialAvailablePresence(ctx, cli)
+		go func() { // once the server accepts the login
+			if cli.WaitForConnection(time.Minute) {
+				sendInitialAvailablePresence(context.WithoutCancel(ctx), cli)
+			}
+		}()
 		return nil
 	}
 

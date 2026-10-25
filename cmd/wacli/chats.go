@@ -117,6 +117,9 @@ be online.`,
 }
 
 func doBackfill(ctx context.Context, s *session, r request) (any, error) {
+	if err := s.waitLoggedIn(ctx); err != nil { // also in a sync that is reconnecting
+		return nil, err
+	}
 	var jids []string
 	if r.All {
 		for _, c := range s.ar.Chats() {
@@ -136,10 +139,11 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 	for _, jid := range jids {
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
 		results = append(results, res)
-		if errors.Is(err, archiver.ErrNoAnswer) {
-			unanswered++
-		} else if err == nil {
+		switch {
+		case err == nil || res.Requests > 1: // some page came back
 			answered = true
+		case errors.Is(err, archiver.ErrNoAnswer):
+			unanswered++
 		}
 		if err != nil {
 			// The first three chats silent: the phone is offline, not the
@@ -275,6 +279,9 @@ func newLogoutCmd(f *rootFlags) *cobra.Command {
 			ctx, cancel := signalContext()
 			defer cancel()
 			if err := s.wa.Connect(ctx, wa.ConnectOptions{}); err != nil {
+				return err
+			}
+			if err := s.waitLoggedIn(ctx); err != nil {
 				return err
 			}
 			if err := s.wa.Logout(ctx); err != nil {

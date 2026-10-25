@@ -171,6 +171,7 @@ func (a *Archiver) handle(evt any) {
 	case *events.Connected:
 		a.trackConnection(v)
 		a.nameChanged()
+		a.media.poke() // downloads wait for the login
 	case *events.Disconnected, *events.LoggedOut:
 		a.trackConnection(v)
 	// whatsmeow doesn't reconnect after these.

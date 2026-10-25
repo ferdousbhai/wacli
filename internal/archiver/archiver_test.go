@@ -558,8 +558,8 @@ func TestUnrecoverableDisconnectsHalt(t *testing.T) {
 		a, ar := newTestArchiver(t)
 		a.handle(tc.evt)
 		select {
-		case h := <-a.Halted():
-			if h.Retry != tc.retry || h.Reason == "" {
+		case <-a.Halted():
+			if h := a.Halt(); h.Retry != tc.retry || h.Reason == "" {
 				t.Errorf("%T: %+v", tc.evt, h)
 			}
 		default:

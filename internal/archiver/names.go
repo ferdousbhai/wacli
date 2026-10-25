@@ -143,6 +143,9 @@ func (n *names) group(ctx context.Context, jid types.JID) string {
 	}
 	info, err := n.wa.GetGroupInfo(ctx, jid)
 	if err != nil || info == nil {
+		if !n.wa.IsConnected() {
+			return "" // the connection dropped, not the group: ask again
+		}
 		n.mu.Lock()
 		n.groupErr[jid.String()] = time.Now()
 		n.mu.Unlock()

@@ -85,8 +85,8 @@ func (s *session) waitLoggedIn(ctx context.Context) error {
 			return ctx.Err()
 		case <-s.arc.LoggedOut():
 			return errUnlinked
-		case h := <-s.arc.Halted():
-			return haltErr(h)
+		case <-s.arc.Halted():
+			return haltErr(s.arc.Halt())
 		case <-timeout:
 			return wa.ErrNotConnected
 		case <-t.C:
@@ -101,7 +101,9 @@ func (s *session) waitLoggedIn(ctx context.Context) error {
 func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) error {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	start := time.Now() // linking can take minutes before the first message
+	// Idle counts from the login: linking, and a server busy reconnecting,
+	// can take minutes before the first message.
+	var start time.Time
 	quiet := func() bool { return min(s.arc.Idle(), time.Since(start)) >= idle }
 	var last int64
 	for i := 0; ; i++ {
@@ -110,9 +112,15 @@ func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) error {
 			return nil
 		case <-s.arc.LoggedOut():
 			return errUnlinked
-		case h := <-s.arc.Halted():
-			return haltErr(h)
+		case <-s.arc.Halted():
+			return haltErr(s.arc.Halt())
 		case <-t.C:
+		}
+		if start.IsZero() {
+			if !s.wa.IsConnected() {
+				continue
+			}
+			start = time.Now()
 		}
 		if n := s.arc.Added(); i%10 == 0 && n != last {
 			fmt.Fprintf(os.Stderr, "\rarchived %d messages, %d attachments pending   ", n, s.arc.PendingMedia())
