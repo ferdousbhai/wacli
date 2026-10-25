@@ -66,6 +66,9 @@ func execute(f *rootFlags, r request) (any, error) {
 	if err := s.start(ctx, wa.ConnectOptions{}); err != nil {
 		return nil, err
 	}
+	if err := s.waitLoggedIn(ctx); err != nil {
+		return nil, err
+	}
 	return r.run(ctx, s)
 }
 

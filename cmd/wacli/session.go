@@ -73,6 +73,28 @@ func (s *session) close() {
 	}
 }
 
+// waitLoggedIn waits for the server to accept the login, which comes a
+// moment after Connect returns; requests sent before it fail.
+func (s *session) waitLoggedIn(ctx context.Context) error {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	timeout := time.After(30 * time.Second)
+	for !s.wa.IsConnected() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.arc.LoggedOut():
+			return errUnlinked
+		case h := <-s.arc.Halted():
+			return haltErr(h)
+		case <-timeout:
+			return wa.ErrNotConnected
+		case <-t.C:
+		}
+	}
+	return nil
+}
+
 // runUntilIdle returns once nothing new has been archived for idle and the
 // media that can be downloaded right now is on disk, or with the error to
 // exit with if WhatsApp ends the session.

@@ -138,7 +138,7 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		results = append(results, res)
 		if errors.Is(err, archiver.ErrNoAnswer) {
 			unanswered++
-		} else {
+		} else if err == nil {
 			answered = true
 		}
 		if err != nil {
