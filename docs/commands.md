@@ -35,7 +35,10 @@ as the `wacli-sync` systemd user service; see the README). If WhatsApp unlinks
 this computer, it exits with status 3 so the service stops restarting. If
 WhatsApp ends the connection for good another way (another client took over
 the session, a temporary ban, an outdated wacli), it exits with status 4 and
-`wacli doctor` shows why.
+`wacli doctor` shows why; the service then stays stopped. Deal with the cause
+(close the other client, wait out the ban, update wacli), then
+`systemctl --user start wacli-sync`. `auth` and `sync` without `--follow` exit
+the same way.
 
 ## backfill
 
@@ -48,7 +51,8 @@ message and following the phone's own order, so gaps in the middle of a chat
 are filled too. Progress is saved per chat, so a later run continues where
 this one stopped (`--requests` caps the pages per run); a chat is marked
 complete when the phone has nothing more. The phone must be online: `--all`
-gives up (exit status 1) after three chats in a row get no answer. Phones don't
+gives up (exit status 1) when the first three chats get no answer or the
+connection is lost. Phones don't
 hand linked devices everything; for the rest, use `import`.
 
 ## import
@@ -96,7 +100,8 @@ Shows where the archive and session live, whether this computer is linked,
 whether sync is running and connected (from `.wacli/status.json`, which sync
 updates every 30 seconds), when it last archived something, how many chats
 have complete history and how many attachments are pending, then any problems:
-unlinked, sync silent or disconnected, chats whose files had to be repaired.
+unlinked, sync silent or disconnected, sync stopped by WhatsApp (and why),
+chats whose files had to be repaired.
 `--check` also reads every chat and reports what it would repair, changing
 nothing.
 

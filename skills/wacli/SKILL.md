@@ -48,7 +48,9 @@ having with you.
 
 - `wacli doctor` shows whether sync is running and connected, when it last
   archived something, pending media and problems. If it says unlinked, the user
-  must run `wacli auth` and scan a QR code themselves.
+  must run `wacli auth` and scan a QR code themselves. If it says sync stopped
+  (another client took over, a ban, an outdated wacli), tell the user the
+  reason; once it's dealt with, `systemctl --user start wacli-sync`.
 - Service: `systemctl --user status wacli-sync`; logs: `journalctl --user -u wacli-sync`.
 
 ## Sending (other people only)

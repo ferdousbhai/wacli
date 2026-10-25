@@ -61,9 +61,13 @@ type Halt struct {
 	Retry  bool
 }
 
-func newStatusTracker() *statusTracker {
-	now := time.Now()
-	return &statusTracker{s: Status{PID: os.Getpid(), StartedAt: now}, loggedOut: make(chan struct{}), halted: make(chan Halt, 1)}
+func newStatusTracker(archiveRoot string) *statusTracker {
+	s := Status{PID: os.Getpid(), StartedAt: time.Now()}
+	// Why the last sync stopped stays on show until a connection succeeds.
+	if old, err := ReadStatus(archiveRoot); err == nil {
+		s.LoggedOut, s.LoggedOutAt, s.Halted, s.HaltedAt = old.LoggedOut, old.LoggedOutAt, old.Halted, old.HaltedAt
+	}
+	return &statusTracker{s: s, loggedOut: make(chan struct{}), halted: make(chan Halt, 1)}
 }
 
 func (a *Archiver) trackConnection(evt any) {
@@ -72,6 +76,7 @@ func (a *Archiver) trackConnection(evt any) {
 	switch evt.(type) {
 	case *events.Connected:
 		t.s.Connected, t.s.LastConnected = true, time.Now()
+		t.s.LoggedOut, t.s.LoggedOutAt, t.s.Halted, t.s.HaltedAt = false, time.Time{}, "", time.Time{}
 	case *events.Disconnected:
 		t.s.Connected = false
 	case *events.LoggedOut:

@@ -61,7 +61,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		ar:           ar,
 		wa:           client,
 		names:        newNames(client),
-		status:       newStatusTracker(),
+		status:       newStatusTracker(ar.Root()),
 		logf:         logf,
 		ctx:          context.Background(),
 		cancel:       func() {},

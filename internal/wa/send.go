@@ -2,7 +2,6 @@ package wa
 
 import (
 	"context"
-	"fmt"
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -13,8 +12,8 @@ func (c *Client) SendProtoMessage(ctx context.Context, to types.JID, msg *waProt
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return "", fmt.Errorf("not connected")
+	if !ready(cli) {
+		return "", ErrNotConnected
 	}
 	resp, err := cli.SendMessage(ctx, to, msg)
 	if err != nil {
@@ -27,8 +26,8 @@ func (c *Client) Upload(ctx context.Context, data []byte, mediaType whatsmeow.Me
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return whatsmeow.UploadResponse{}, fmt.Errorf("not connected")
+	if !ready(cli) {
+		return whatsmeow.UploadResponse{}, ErrNotConnected
 	}
 	return cli.Upload(ctx, data, mediaType)
 }

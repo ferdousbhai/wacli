@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -44,7 +43,9 @@ all media. Linking again replaces the previous link.`,
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "Linked. Archiving history into %s (keep the phone online)…\n", s.ar.Root())
-			s.runUntilIdle(ctx, idle)
+			if err := s.runUntilIdle(ctx, idle); err != nil {
+				return err
+			}
 			return report(f, s.summary())
 		},
 	}
@@ -75,7 +76,9 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 				return err
 			}
 			if !follow {
-				s.runUntilIdle(ctx, idle)
+				if err := s.runUntilIdle(ctx, idle); err != nil {
+					return err
+				}
 				return report(f, s.summary())
 			}
 			stop, err := serveIPC(ctx, f, s)
@@ -90,10 +93,7 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 			case <-s.arc.LoggedOut():
 				return errUnlinked
 			case h := <-s.arc.Halted():
-				if h.Retry {
-					return errors.New(h.Reason)
-				}
-				return fmt.Errorf("%w: %s", errHalted, h.Reason)
+				return haltErr(h)
 			}
 		},
 	}

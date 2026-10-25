@@ -2,6 +2,7 @@ package wa
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -94,10 +95,19 @@ func (c *Client) LinkedLID() string {
 	return lid.ToNonAD().String()
 }
 
+// IsConnected reports whether the connection is up and logged in: between
+// the dial and the server's go-ahead, requests fail.
 func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.client != nil && c.client.IsConnected()
+	return ready(c.client)
+}
+
+// ErrNotConnected is a request made while IsConnected is false.
+var ErrNotConnected = errors.New("not connected to WhatsApp")
+
+func ready(cli *whatsmeow.Client) bool {
+	return cli != nil && cli.IsConnected() && cli.IsLoggedIn()
 }
 
 // HistorySyncLimits shapes the history bundle the primary device pushes when
@@ -294,8 +304,8 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return "", fmt.Errorf("not connected")
+	if !ready(cli) {
+		return "", ErrNotConnected
 	}
 	if count <= 0 {
 		count = 50
@@ -324,8 +334,8 @@ func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupI
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return nil, fmt.Errorf("not connected")
+	if !ready(cli) {
+		return nil, ErrNotConnected
 	}
 	return cli.GetGroupInfo(ctx, jid)
 }

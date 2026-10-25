@@ -67,8 +67,8 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return 0, fmt.Errorf("not connected")
+	if !ready(cli) {
+		return 0, ErrNotConnected
 	}
 	if strings.TrimSpace(directPath) == "" {
 		return 0, fmt.Errorf("direct path is required")

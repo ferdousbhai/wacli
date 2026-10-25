@@ -25,8 +25,8 @@ func (c *Client) SendMediaRetryReceipt(ctx context.Context, info *types.MessageI
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return fmt.Errorf("not connected")
+	if !ready(cli) {
+		return ErrNotConnected
 	}
 	if info == nil {
 		return fmt.Errorf("message info is required")

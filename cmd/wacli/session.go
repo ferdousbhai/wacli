@@ -74,8 +74,9 @@ func (s *session) close() {
 }
 
 // runUntilIdle returns once nothing new has been archived for idle and the
-// media that can be downloaded right now is on disk.
-func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
+// media that can be downloaded right now is on disk, or with the error to
+// exit with if WhatsApp ends the session.
+func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) error {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	start := time.Now() // linking can take minutes before the first message
@@ -84,7 +85,11 @@ func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
 	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
+		case <-s.arc.LoggedOut():
+			return errUnlinked
+		case h := <-s.arc.Halted():
+			return haltErr(h)
 		case <-t.C:
 		}
 		if n := s.arc.Added(); i%10 == 0 && n != last {
@@ -95,7 +100,7 @@ func (s *session) runUntilIdle(ctx context.Context, idle time.Duration) {
 			s.arc.WaitMedia(ctx)
 			if quiet() {
 				fmt.Fprintln(os.Stderr)
-				return
+				return nil
 			}
 		}
 	}
@@ -108,4 +113,12 @@ func (s *session) summary() map[string]any {
 		"new_messages":  s.arc.Added(),
 		"pending_media": s.arc.PendingMedia(),
 	}
+}
+
+// haltErr is what a sync exits with when WhatsApp ends the connection.
+func haltErr(h archiver.Halt) error {
+	if h.Retry {
+		return errors.New(h.Reason)
+	}
+	return fmt.Errorf("%w: %s", errHalted, h.Reason)
 }

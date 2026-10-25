@@ -544,3 +544,35 @@ func TestRenameDuringHoldIsOnDiskBeforeFlagClears(t *testing.T) {
 		t.Errorf("flag cleared but the file still has the number: %q", data)
 	}
 }
+
+func TestUnrecoverableDisconnectsHalt(t *testing.T) {
+	for _, tc := range []struct {
+		evt   any
+		retry bool
+	}{
+		{&events.StreamReplaced{}, false},
+		{&events.ClientOutdated{}, false},
+		{&events.TemporaryBan{Expire: time.Hour}, false},
+		{&events.ConnectFailure{Reason: events.ConnectFailureReason(499)}, true},
+	} {
+		a, ar := newTestArchiver(t)
+		a.handle(tc.evt)
+		select {
+		case h := <-a.Halted():
+			if h.Retry != tc.retry || h.Reason == "" {
+				t.Errorf("%T: %+v", tc.evt, h)
+			}
+		default:
+			t.Fatalf("%T didn't halt", tc.evt)
+		}
+		// The reason outlives the process until a connection succeeds.
+		b, _ := New(ar, nil, nil)
+		if b.status.s.Halted == "" {
+			t.Errorf("%T: reason not carried over", tc.evt)
+		}
+		b.trackConnection(&events.Connected{})
+		if st, _ := ReadStatus(ar.Root()); st.Halted != "" {
+			t.Errorf("%T: reason kept after connecting: %q", tc.evt, st.Halted)
+		}
+	}
+}

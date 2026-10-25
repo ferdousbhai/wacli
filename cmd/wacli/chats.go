@@ -132,18 +132,20 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		jids = []string{jid.String()}
 	}
 	var results []archiver.BackfillResult
-	unanswered := 0
+	unanswered, answered := 0, false
 	for _, jid := range jids {
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
 		results = append(results, res)
 		if errors.Is(err, archiver.ErrNoAnswer) {
 			unanswered++
 		} else {
-			unanswered = 0
+			answered = true
 		}
 		if err != nil {
-			// Three silent chats in a row: the phone is offline, not the chat.
-			if r.All && ctx.Err() == nil && unanswered < 3 {
+			// The first three chats silent: the phone is offline, not the
+			// chats. Without a connection nothing can be asked.
+			offline := unanswered >= 3 && !answered || errors.Is(err, wa.ErrNotConnected)
+			if r.All && ctx.Err() == nil && !offline {
 				logf("%s: %v", res.Folder, err)
 				continue
 			}
