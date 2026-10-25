@@ -35,7 +35,10 @@ func (c *Client) SendMediaRetryReceipt(ctx context.Context, info *types.MessageI
 	return cli.SendMediaRetryReceipt(ctx, &retryInfo, mediaKey)
 }
 
-func rewriteMediaRetryInfoForLID(ctx context.Context, cli *whatsmeow.Client, info types.MessageInfo, resolve pollVoteLIDResolver) types.MessageInfo {
+// lidResolver maps a phone-number JID to its LID, for tests to replace.
+type lidResolver func(context.Context, *whatsmeow.Client, types.JID) types.JID
+
+func rewriteMediaRetryInfoForLID(ctx context.Context, cli *whatsmeow.Client, info types.MessageInfo, resolve lidResolver) types.MessageInfo {
 	if cli == nil || cli.Store == nil || cli.Store.LIDMigrationTimestamp <= 0 || resolve == nil {
 		return info
 	}

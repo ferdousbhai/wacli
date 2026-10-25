@@ -1,54 +1,22 @@
+// Package config resolves where wacli keeps the WhatsApp session.
 package config
 
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 )
 
-// EnvStoreDir is the environment variable that overrides the default store
-// directory. This is useful for Docker, CI, and multi-tenant deployments
-// where the store path needs to be configured without passing --store on
-// every invocation.
+// EnvStoreDir overrides the default store directory.
 const EnvStoreDir = "WACLI_STORE_DIR"
 
-const ConfigFileName = "config.yaml"
-
-var accountNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
-type AccountsConfig struct {
-	DefaultAccount string                  `yaml:"default_account,omitempty"`
-	Accounts       map[string]AccountEntry `yaml:"accounts,omitempty"`
-}
-
-type AccountEntry struct {
-	Store string `yaml:"store"`
-	Label string `yaml:"label,omitempty"`
-}
-
-type Account struct {
-	Name            string
-	Label           string
-	ConfiguredStore string
-	StoreDir        string
-	Default         bool
-}
-
 // DefaultStoreDir returns the store directory to use when --store is not
-// supplied. It checks WACLI_STORE_DIR first, then falls back to the XDG state
-// directory on Linux or ~/.wacli on other platforms.
+// supplied: WACLI_STORE_DIR, else the XDG state directory on Linux (or a
+// legacy ~/.wacli that already exists), else ~/.wacli.
 func DefaultStoreDir() string {
 	if dir := os.Getenv(EnvStoreDir); dir != "" {
 		return dir
 	}
-	return DefaultBaseDir()
-}
-
-// DefaultBaseDir returns wacli's platform default state root without honoring
-// WACLI_STORE_DIR. Account config lives here so a temporary store override
-// does not hide the account registry.
-func DefaultBaseDir() string {
 	xdgStateHome := os.Getenv("XDG_STATE_HOME")
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

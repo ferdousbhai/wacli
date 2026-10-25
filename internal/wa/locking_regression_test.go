@@ -87,7 +87,6 @@ func TestEventHandlerRegistrationDoesNotCallUnderLock(t *testing.T) {
 	}
 
 	check("AddEventHandler", "AddEventHandler")
-	check("RemoveEventHandler", "RemoveEventHandler")
 }
 
 func isCallToMethod(call *ast.CallExpr, method string) bool {

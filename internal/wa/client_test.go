@@ -6,14 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/appstate"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
 	waStore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestNewEnablesRetryMessageStore(t *testing.T) {
@@ -34,168 +30,6 @@ func TestNewEnablesRetryMessageStore(t *testing.T) {
 	}
 	if got := c.LinkedJID(); got != "" {
 		t.Fatalf("LinkedJID before auth = %q", got)
-	}
-}
-
-func TestBuildDeleteForMePatch(t *testing.T) {
-	chat := types.NewJID("123", types.DefaultUserServer)
-	sender := types.NewJID("456", types.DefaultUserServer)
-	ts := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	patch := buildDeleteForMePatch(types.MessageInfo{
-		MessageSource: types.MessageSource{
-			Chat:     chat,
-			Sender:   sender,
-			IsFromMe: false,
-		},
-		ID:        types.MessageID("mid"),
-		Timestamp: ts,
-	}, true)
-
-	if patch.Type != appstate.WAPatchRegularHigh {
-		t.Fatalf("patch type = %q", patch.Type)
-	}
-	if len(patch.Mutations) != 1 {
-		t.Fatalf("mutations = %d", len(patch.Mutations))
-	}
-	mut := patch.Mutations[0]
-	wantIndex := []string{appstate.IndexDeleteMessageForMe, chat.String(), "mid", "0", sender.String()}
-	for i, want := range wantIndex {
-		if mut.Index[i] != want {
-			t.Fatalf("index[%d] = %q, want %q", i, mut.Index[i], want)
-		}
-	}
-	action := mut.Value.GetDeleteMessageForMeAction()
-	if action == nil || !action.GetDeleteMedia() || action.GetMessageTimestamp() != ts.UnixMilli() {
-		t.Fatalf("delete-for-me action = %+v", action)
-	}
-}
-
-func TestWrapEphemeralPollMessagePreservesSecretOnOuterMessage(t *testing.T) {
-	secret := []byte("poll-secret")
-	inner := &waProto.Message{
-		PollCreationMessage: &waProto.PollCreationMessage{Name: proto.String("Lunch?")},
-		MessageContextInfo:  &waProto.MessageContextInfo{MessageSecret: secret},
-	}
-
-	wrapped := wrapEphemeralPollMessage(inner)
-	if wrapped.GetEphemeralMessage().GetMessage() != inner {
-		t.Fatalf("inner message not wrapped")
-	}
-	if got := wrapped.GetMessageContextInfo().GetMessageSecret(); string(got) != string(secret) {
-		t.Fatalf("outer message secret = %q, want %q", got, secret)
-	}
-}
-
-func TestBuildPollCreationMessageSelectsVersion(t *testing.T) {
-	tests := []struct {
-		name           string
-		selectable     int
-		announcement   bool
-		wantBase       bool
-		wantV2         bool
-		wantV3         bool
-		wantSelectable uint32
-	}{
-		{name: "multi base", selectable: 2, wantBase: true, wantSelectable: 2},
-		{name: "single v3", selectable: 1, wantV3: true, wantSelectable: 1},
-		{name: "announcement v2", selectable: 1, announcement: true, wantV2: true, wantSelectable: 1},
-		{name: "zero stays base", selectable: 0, wantBase: true, wantSelectable: 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := buildPollCreationMessage("Lunch?", []string{"A", "B"}, tt.selectable, tt.announcement)
-			if got := msg.GetPollCreationMessage() != nil; got != tt.wantBase {
-				t.Fatalf("base = %t, want %t", got, tt.wantBase)
-			}
-			if got := msg.GetPollCreationMessageV2() != nil; got != tt.wantV2 {
-				t.Fatalf("v2 = %t, want %t", got, tt.wantV2)
-			}
-			if got := msg.GetPollCreationMessageV3() != nil; got != tt.wantV3 {
-				t.Fatalf("v3 = %t, want %t", got, tt.wantV3)
-			}
-			creation := msg.GetPollCreationMessage()
-			if tt.wantV2 {
-				creation = msg.GetPollCreationMessageV2()
-			} else if tt.wantV3 {
-				creation = msg.GetPollCreationMessageV3()
-			}
-			if creation.GetName() != "Lunch?" {
-				t.Fatalf("name = %q", creation.GetName())
-			}
-			if got := creation.GetSelectableOptionsCount(); got != tt.wantSelectable {
-				t.Fatalf("selectable = %d, want %d", got, tt.wantSelectable)
-			}
-			if len(msg.GetMessageContextInfo().GetMessageSecret()) != 32 {
-				t.Fatalf("message secret length = %d, want 32", len(msg.GetMessageContextInfo().GetMessageSecret()))
-			}
-		})
-	}
-}
-
-func TestIsCommunityAnnouncementGroup(t *testing.T) {
-	tests := []struct {
-		name string
-		info *types.GroupInfo
-		want bool
-	}{
-		{name: "nil"},
-		{name: "regular announce", info: &types.GroupInfo{GroupAnnounce: types.GroupAnnounce{IsAnnounce: true}}},
-		{name: "community parent not announce", info: &types.GroupInfo{GroupParent: types.GroupParent{IsParent: true}}},
-		{name: "community announcement", info: &types.GroupInfo{GroupAnnounce: types.GroupAnnounce{IsAnnounce: true}, GroupParent: types.GroupParent{IsParent: true}}, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isCommunityAnnouncementGroup(tt.info); got != tt.want {
-				t.Fatalf("isCommunityAnnouncementGroup = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRewritePollVoteInfoForLIDRewritesDM(t *testing.T) {
-	chat := types.NewJID("15551234567", types.DefaultUserServer)
-	sender := types.NewJID("15557654321", types.DefaultUserServer)
-	info := types.MessageInfo{
-		MessageSource: types.MessageSource{Chat: chat, Sender: sender},
-		ID:            "poll-id",
-	}
-	cli := &whatsmeow.Client{Store: &waStore.Device{LIDMigrationTimestamp: 1}}
-
-	got := rewritePollVoteInfoForLID(context.Background(), cli, info, func(_ context.Context, _ *whatsmeow.Client, jid types.JID) types.JID {
-		return types.NewJID(jid.User+"lid", types.HiddenUserServer)
-	})
-
-	if got.Chat.Server != types.HiddenUserServer || got.Chat.User != chat.User+"lid" {
-		t.Fatalf("chat = %s", got.Chat)
-	}
-	if got.Sender.Server != types.HiddenUserServer || got.Sender.User != sender.User+"lid" {
-		t.Fatalf("sender = %s", got.Sender)
-	}
-}
-
-func TestRewritePollVoteInfoForLIDLeavesGroupSenderPN(t *testing.T) {
-	group := types.NewJID("120363001234567890", types.GroupServer)
-	sender := types.NewJID("15557654321", types.DefaultUserServer)
-	info := types.MessageInfo{
-		MessageSource: types.MessageSource{Chat: group, Sender: sender, IsGroup: true},
-		ID:            "poll-id",
-	}
-	cli := &whatsmeow.Client{Store: &waStore.Device{LIDMigrationTimestamp: 1}}
-	calls := 0
-
-	got := rewritePollVoteInfoForLID(context.Background(), cli, info, func(_ context.Context, _ *whatsmeow.Client, jid types.JID) types.JID {
-		calls++
-		return types.NewJID(jid.User+"lid", types.HiddenUserServer)
-	})
-
-	if got.Chat != group {
-		t.Fatalf("chat = %s, want %s", got.Chat, group)
-	}
-	if got.Sender != sender {
-		t.Fatalf("sender = %s, want %s", got.Sender, sender)
-	}
-	if calls != 0 {
-		t.Fatalf("resolver calls = %d, want 0", calls)
 	}
 }
 
@@ -221,20 +55,6 @@ func TestResolvePNToLIDPublicUsesOwnLIDWithoutCache(t *testing.T) {
 	}
 }
 
-func TestNewsletterName(t *testing.T) {
-	meta := &types.NewsletterMetadata{
-		ThreadMeta: types.NewsletterThreadMetadata{
-			Name: types.NewsletterText{Text: "  Launch Notes  "},
-		},
-	}
-	if got := NewsletterName(meta); got != "Launch Notes" {
-		t.Fatalf("NewsletterName = %q", got)
-	}
-	if got := NewsletterName(nil); got != "" {
-		t.Fatalf("NewsletterName(nil) = %q", got)
-	}
-}
-
 func TestQRChannelEventError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -257,24 +77,6 @@ func TestQRChannelEventError(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestBestContactName(t *testing.T) {
-	if BestContactName(types.ContactInfo{Found: false, FullName: "x"}) != "" {
-		t.Fatalf("expected empty for not found")
-	}
-	if BestContactName(types.ContactInfo{Found: true, FullName: "Full"}) != "Full" {
-		t.Fatalf("expected full name")
-	}
-	if BestContactName(types.ContactInfo{Found: true, FirstName: "First"}) != "First" {
-		t.Fatalf("expected first name")
-	}
-	if BestContactName(types.ContactInfo{Found: true, BusinessName: "Biz"}) != "Biz" {
-		t.Fatalf("expected business name")
-	}
-	if BestContactName(types.ContactInfo{Found: true, PushName: "Push"}) != "Push" {
-		t.Fatalf("expected push name")
 	}
 }
 

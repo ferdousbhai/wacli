@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ferdousbhai/wacli/internal/out"
@@ -21,8 +20,6 @@ func init() {
 	signalLog.Setup(&logger)
 }
 
-var libsignalEvents atomic.Pointer[out.EventWriter]
-
 type libsignalLogger struct{}
 
 // Debug can contain keys and ciphertext. Info has no production callers in
@@ -36,15 +33,6 @@ func (l libsignalLogger) Error(caller, message string)   { l.output("error", cal
 
 func (libsignalLogger) output(level, caller, message string) {
 	message = safeLibsignalMessage(message)
-	if events := libsignalEvents.Load(); events.Enabled() {
-		// Even ERROR may describe a failed attempt before a successful fallback,
-		// not a terminal command error. Preserve its level inside a warning event.
-		_ = events.Emit("warning", map[string]any{
-			"code": "libsignal_diagnostic", "level": level, "source": "libsignal",
-			"caller": caller, "message": message,
-		})
-		return
-	}
 	_ = out.WriteError(os.Stderr, false, fmt.Errorf("[libsignal %s] %s: %s", level, caller, message))
 }
 

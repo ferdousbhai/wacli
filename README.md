@@ -23,17 +23,20 @@ There is no database to query. People open the folders; agents `cat`, `grep -r`
 and `tail -f` them. wacli links to WhatsApp as a companion device (like
 WhatsApp Desktop) using [whatsmeow](https://github.com/tulir/whatsmeow).
 
-This is a hard fork of [openclaw/wacli](https://github.com/openclaw/wacli),
-which stores messages in SQLite. See [docs/archive.md](docs/archive.md) for the
-format and how folders stay current.
+Started from [openclaw/wacli](https://github.com/openclaw/wacli) (MIT), which
+stores messages in SQLite. [docs/archive.md](docs/archive.md) describes the
+format and how folders stay current; [docs/commands.md](docs/commands.md) every
+command.
 
 ## Install
 
 Needs Go 1.27+ and a C compiler (the WhatsApp session store is SQLite):
 
 ```bash
-CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/ferdousbhai/wacli/cmd/wacli@latest
+go install github.com/ferdousbhai/wacli/cmd/wacli@latest   # or, from a checkout: make install
 ```
+
+With GCC 15+, set `CGO_CFLAGS=-Wno-error=missing-braces` (the Makefile does).
 
 ## Use
 
@@ -56,7 +59,10 @@ To run sync as a systemd user service:
 ```bash
 cp contrib/systemd/wacli-sync.service ~/.config/systemd/user/   # runs ~/.local/bin/wacli
 systemctl --user enable --now wacli-sync
+loginctl enable-linger "$USER"   # keep it running while you're logged out
 ```
+
+`wacli doctor` shows whether it is connected and archiving.
 
 ## Settings
 

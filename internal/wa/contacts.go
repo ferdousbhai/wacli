@@ -3,7 +3,6 @@ package wa
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -37,26 +36,6 @@ func resolvePNToLID(ctx context.Context, cli *whatsmeow.Client, jid types.JID) t
 	return jid
 }
 
-func (c *Client) GetUserInfo(ctx context.Context, jids []types.JID) (map[types.JID]types.UserInfo, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return nil, fmt.Errorf("not connected")
-	}
-	return cli.GetUserInfo(ctx, jids)
-}
-
-func (c *Client) IsOnWhatsApp(ctx context.Context, phones []string) ([]types.IsOnWhatsAppResponse, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return nil, fmt.Errorf("not connected")
-	}
-	return cli.IsOnWhatsApp(ctx, phones)
-}
-
 func (c *Client) GetContact(ctx context.Context, jid types.JID) (types.ContactInfo, error) {
 	c.mu.Lock()
 	cli := c.client
@@ -65,16 +44,6 @@ func (c *Client) GetContact(ctx context.Context, jid types.JID) (types.ContactIn
 		return types.ContactInfo{}, fmt.Errorf("contacts store not available")
 	}
 	return cli.Store.Contacts.GetContact(ctx, jid)
-}
-
-func (c *Client) GetAllContacts(ctx context.Context) (map[types.JID]types.ContactInfo, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || cli.Store == nil || cli.Store.Contacts == nil {
-		return nil, fmt.Errorf("contacts store not available")
-	}
-	return cli.Store.Contacts.GetAllContacts(ctx)
 }
 
 func (c *Client) ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID {
@@ -102,58 +71,4 @@ func (c *Client) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	cli := c.client
 	c.mu.Unlock()
 	return resolvePNToLID(ctx, cli, jid)
-}
-
-func BestContactName(info types.ContactInfo) string {
-	if !info.Found {
-		return ""
-	}
-	if s := strings.TrimSpace(info.FullName); s != "" {
-		return s
-	}
-	if s := strings.TrimSpace(info.FirstName); s != "" {
-		return s
-	}
-	if s := strings.TrimSpace(info.BusinessName); s != "" {
-		return s
-	}
-	if s := strings.TrimSpace(info.PushName); s != "" && s != "-" {
-		return s
-	}
-	if s := strings.TrimSpace(info.RedactedPhone); s != "" {
-		return s
-	}
-	return ""
-}
-
-func (c *Client) ResolveChatName(ctx context.Context, chat types.JID, pushName string) string {
-	fallback := chat.String()
-
-	if chat.Server == types.NewsletterServer {
-		meta, err := c.GetNewsletterInfo(ctx, chat)
-		if err == nil && meta != nil {
-			if name := NewsletterName(meta); name != "" {
-				return name
-			}
-		}
-	} else if chat.Server == types.GroupServer || chat.IsBroadcastList() {
-		info, err := c.GetGroupInfo(ctx, chat)
-		if err == nil && info != nil {
-			if name := strings.TrimSpace(info.GroupName.Name); name != "" {
-				return name
-			}
-		}
-	} else {
-		info, err := c.GetContact(ctx, chat.ToNonAD())
-		if err == nil {
-			if name := BestContactName(info); name != "" {
-				return name
-			}
-		}
-	}
-
-	if name := strings.TrimSpace(pushName); name != "" && name != "-" {
-		return name
-	}
-	return fallback
 }

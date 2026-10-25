@@ -40,9 +40,5 @@ go.work.sum
 # Built CLI binary
 /wacli
 
-# pnpm build output
+# Build output
 /dist/
-.pnpm-store/
-
-# Node dependencies
-node_modules/

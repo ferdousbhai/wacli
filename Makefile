@@ -1,69 +1,36 @@
-TAG ?=
-COMMIT ?=
-CROSS_PLATFORM_DIR ?=
-CROSS_PLATFORM_MANIFEST_SHA256 ?=
-RELEASE_OUTPUT ?= dist/release/$(TAG)
-CANDIDATE_DIR ?=
-MAC_RELEASE ?=
+# wacli needs cgo: the WhatsApp session store is SQLite (go-sqlite3).
+GO ?= go
+export CGO_ENABLED := 1
+# GCC 15+ rejects go-sqlite3's C without this.
+export CGO_CFLAGS := $(CGO_CFLAGS) -Wno-error=missing-braces
 
-.DEFAULT_GOAL := help
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
+DEADCODE := golang.org/x/tools/cmd/deadcode@v0.52.0
 
-.PHONY: help build test fmt lint release-check check snapshot release verify-release
+.PHONY: build install test lint check
 
-help:
-	@printf '%s\n' \
-		'Available targets:' \
-		'  help            Print available targets (default).' \
-		'  build           Build the CLI into dist/wacli.' \
-		'  test            Run the full Go, FTS, cross-build, and docs test suite.' \
-		'  fmt             Check Go formatting.' \
-		'  lint            Run vet, vulnerability, and dead-code checks.' \
-		'  check           Run every local gate enforced by CI.' \
-		'  snapshot        Build credential-free release artifacts.' \
-		'  release         Build, sign, notarize, and verify official release artifacts.' \
-		'  verify-release  Verify existing release artifacts.'
-
+## build: compile dist/wacli
 build:
-	GOWORK=off pnpm --silent build
+	$(GO) build -o dist/wacli ./cmd/wacli
 
+## install: install wacli into ~/.local/bin
+install:
+	GOBIN=$(HOME)/.local/bin $(GO) install ./cmd/wacli
+
+## test: unit tests (race detector), Windows build of the cgo-free packages,
+## and the readable error for builds without cgo
 test:
-	GOWORK=off pnpm --silent test
+	$(GO) test -race ./...
+	CGO_ENABLED=0 GOOS=windows $(GO) vet ./internal/archive ./internal/lock ./internal/delegate
+	CGO_ENABLED=0 $(GO) build -o /dev/null ./cmd/wacli 2>&1 | grep -q wacli_requires_cgo_enabled_1_for_go_sqlite3
 
-fmt:
-	GOWORK=off pnpm --silent format:check
-
+## lint: formatting, vet, unreachable code, known vulnerabilities
 lint:
-	GOWORK=off pnpm --silent lint
-	@test "$$(GOWORK=off go env GOVERSION)" = go1.27.3
-	GOWORK=off pnpm --silent govulncheck:source
-	GOWORK=off pnpm --silent lint:deadcode
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+	$(GO) vet ./...
+	@out=$$($(GO) run $(DEADCODE) ./... && $(GO) run $(DEADCODE) -test ./...); \
+		if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
+	$(GO) run $(GOVULNCHECK) ./...
 
-release-check:
-	$${GORELEASER:-goreleaser} check --config .goreleaser.yaml
-	$${GORELEASER:-goreleaser} check --config .goreleaser-linux-windows.yaml
-
-check: fmt lint test build release-check
-	GOWORK=off pnpm --silent docs:site
-	git diff --check
-
-snapshot:
-	GOWORK=off $${GORELEASER:-goreleaser} release --snapshot --clean --skip=publish --config .goreleaser.yaml
-
-release:
-	@test -n "$(TAG)" -a -n "$(COMMIT)" -a -n "$(CROSS_PLATFORM_DIR)" -a -n "$(CROSS_PLATFORM_MANIFEST_SHA256)" -a -n "$(MAC_RELEASE)" || \
-		(printf '%s\n' 'usage: make release TAG=vX.Y.Z COMMIT=<full-sha> CROSS_PLATFORM_DIR=<dir> CROSS_PLATFORM_MANIFEST_SHA256=<sha256> MAC_RELEASE=<path> [RELEASE_OUTPUT=<dir>]' >&2; exit 2)
-	"$(MAC_RELEASE)" codesign-run -- \
-		node scripts/release-local.mjs prepare \
-			--tag "$(TAG)" \
-			--commit "$(COMMIT)" \
-			--cross-platform-dir "$(CROSS_PLATFORM_DIR)" \
-			--cross-platform-manifest-sha256 "$(CROSS_PLATFORM_MANIFEST_SHA256)" \
-			--output "$(RELEASE_OUTPUT)"
-
-verify-release:
-	@test -n "$(TAG)" -a -n "$(COMMIT)" -a -n "$(CANDIDATE_DIR)" || \
-		(printf '%s\n' 'usage: make verify-release TAG=vX.Y.Z COMMIT=<full-sha> CANDIDATE_DIR=<dir>' >&2; exit 2)
-	node scripts/verify-release-candidate.mjs \
-		--dir "$(CANDIDATE_DIR)" \
-		--tag "$(TAG)" \
-		--commit "$(COMMIT)"
+## check: everything CI runs
+check: lint test build

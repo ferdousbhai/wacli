@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -17,23 +17,4 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - name: Format
-        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        env:
-          CGO_ENABLED: "1"
-        run: |
-          go test ./...
-          go test -tags sqlite_fts5 ./...
-          node --test scripts/*.test.mjs
-      - name: Dead code
-        run: bash scripts/check-deadcode.sh
-      - name: Build
-        env:
-          CGO_ENABLED: "1"
-        run: go build -tags sqlite_fts5 -o dist/wacli ./cmd/wacli
+      - run: make check

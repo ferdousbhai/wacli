@@ -10,16 +10,10 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/appstate"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/proto/waHistorySync"
-	"go.mau.fi/whatsmeow/proto/waWeb"
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -32,18 +26,9 @@ type Options struct {
 type Client struct {
 	opts Options
 
-	mu             sync.Mutex
-	client         *whatsmeow.Client
-	container      *sqlstore.Container
-	contactJournal *ContactStoreJournal
-}
-
-// ContactJournal returns the journal of whatsmeow's contact store writes for
-// the open session, or nil before the session store is opened.
-func (c *Client) ContactJournal() *ContactStoreJournal {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.contactJournal
+	mu        sync.Mutex
+	client    *whatsmeow.Client
+	container *sqlstore.Container
 }
 
 func New(opts Options) (*Client, error) {
@@ -115,20 +100,6 @@ func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.client != nil && c.client.IsConnected()
-}
-
-func (c *Client) SetAutoReconnect(enabled bool) (bool, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client == nil {
-		return false, false
-	}
-	previous := c.client.EnableAutoReconnect
-	if c.client.IsConnected() {
-		return previous, false
-	}
-	c.client.EnableAutoReconnect = enabled
-	return previous, true
 }
 
 // HistorySyncLimits shapes the history bundle the primary device pushes when
@@ -344,77 +315,6 @@ func (c *Client) AddEventHandler(handler func(any)) uint32 {
 	return cli.AddEventHandler(handler)
 }
 
-func (c *Client) RemoveEventHandler(id uint32) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil {
-		return
-	}
-	cli.RemoveEventHandler(id)
-}
-
-func (c *Client) DecryptSecretEncryptedMessage(ctx context.Context, evt *events.Message) (*waE2E.Message, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil {
-		return nil, fmt.Errorf("whatsapp client is not initialized")
-	}
-	return cli.DecryptSecretEncryptedMessage(ctx, evt)
-}
-
-func (c *Client) DeleteHistorySyncMedia(ctx context.Context, notif *waE2E.HistorySyncNotification) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil {
-		return fmt.Errorf("whatsapp client is not initialized")
-	}
-	if notif == nil || notif.GetDirectPath() == "" {
-		return nil
-	}
-	return cli.DeleteMedia(ctx, whatsmeow.MediaHistory, notif.GetDirectPath(), notif.GetFileEncSHA256(), notif.GetEncHandle())
-}
-
-func (c *Client) DecryptReaction(ctx context.Context, reaction *events.Message) (*waProto.ReactionMessage, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return nil, fmt.Errorf("not connected")
-	}
-	return cli.DecryptReaction(ctx, reaction)
-}
-
-func (c *Client) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo) (*events.Message, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil {
-		return nil, fmt.Errorf("whatsapp client is not initialized")
-	}
-	return cli.ParseWebMessage(chatJID, webMsg)
-}
-
-func (c *Client) SetManualHistorySyncDownload(enabled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client != nil {
-		c.client.ManualHistorySyncDownload = enabled
-	}
-}
-
-func (c *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.HistorySyncNotification) (*waHistorySync.HistorySync, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil {
-		return nil, fmt.Errorf("whatsapp client is not initialized")
-	}
-	return cli.DownloadHistorySync(ctx, notif, true)
-}
-
 func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client
@@ -445,59 +345,6 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 	return resp.ID, nil
 }
 
-func (c *Client) RequestAppStateRecovery(ctx context.Context, name string) (types.MessageID, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return "", fmt.Errorf("not connected")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("app state collection name is required")
-	}
-
-	resp, err := cli.SendPeerMessage(ctx, whatsmeow.BuildAppStateRecoveryRequest(appstate.WAPatchName(name)))
-	if err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
-func (c *Client) FetchAppState(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return fmt.Errorf("not connected")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("app state collection name is required")
-	}
-	return cli.FetchAppState(ctx, appstate.WAPatchName(name), fullSync, onlyIfNotSynced)
-}
-
-// FetchAppStateEvents fetches one collection without globally dispatching the
-// resulting events, so callers can persist that exact collection atomically
-// with their own recovery marker protocol.
-func (c *Client) FetchAppStateEvents(ctx context.Context, name string, fullSync, onlyIfNotSynced bool) ([]any, error) {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return nil, fmt.Errorf("not connected")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("app state collection name is required")
-	}
-	if fullSync && !cli.EmitAppStateEventsOnFullSync {
-		return nil, fmt.Errorf("full app state replay mutation emission is disabled")
-	}
-	return cli.DangerousInternals().FetchAppState(ctx, appstate.WAPatchName(name), fullSync, onlyIfNotSynced)
-}
-
 func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error) {
 	c.mu.Lock()
 	cli := c.client
@@ -506,17 +353,6 @@ func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupI
 		return nil, fmt.Errorf("not connected")
 	}
 	return cli.GetGroupInfo(ctx, jid)
-}
-
-// SendChatPresence sends a typing or paused indicator to a chat.
-func (c *Client) SendChatPresence(ctx context.Context, jid types.JID, state types.ChatPresence, media types.ChatPresenceMedia) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return fmt.Errorf("not connected")
-	}
-	return cli.SendChatPresence(ctx, jid, state, media)
 }
 
 func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client) {
@@ -529,29 +365,6 @@ func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client) {
 	}
 }
 
-// SendPresence updates the authenticated account's global presence status.
-func (c *Client) SendPresence(ctx context.Context, presence types.Presence) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return fmt.Errorf("not connected")
-	}
-	return cli.SendPresence(ctx, presence)
-}
-
-// SubscribePresence asks WhatsApp to send a user's presence (online, last
-// seen) to this connection. The subscription ends with the connection.
-func (c *Client) SubscribePresence(ctx context.Context, jid types.JID) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if cli == nil || !cli.IsConnected() {
-		return fmt.Errorf("not connected")
-	}
-	return cli.SubscribePresence(ctx, jid)
-}
-
 func (c *Client) Logout(ctx context.Context) error {
 	c.mu.Lock()
 	cli := c.client
@@ -560,30 +373,6 @@ func (c *Client) Logout(ctx context.Context) error {
 		return fmt.Errorf("not initialized")
 	}
 	return cli.Logout(ctx)
-}
-
-// Reconnect loop helper.
-func (c *Client) ReconnectWithBackoff(ctx context.Context, minDelay, maxDelay time.Duration, opts ConnectOptions) error {
-	opts.AllowQR = false
-	opts.DetachSocket = true
-	delay := minDelay
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err := c.Connect(ctx, opts); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-	}
 }
 
 // OwnPushName is the profile name of the linked account.
