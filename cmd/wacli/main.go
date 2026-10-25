@@ -33,6 +33,7 @@ var errUnlinked = errors.New("this computer is not linked to WhatsApp (or was un
 const exitUnlinked = 3
 
 func main() {
+	refreshSkill()
 	if err := newRoot().Execute(); err != nil {
 		if errors.Is(err, errUnlinked) {
 			os.Exit(exitUnlinked)
@@ -70,6 +71,7 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		newSendCmd(f),
 		newDoctorCmd(f),
 		newLogoutCmd(f),
+		newSkillCmd(),
 	)
 	wrapErrors(root, f)
 	return root

@@ -97,6 +97,19 @@ nothing.
 
 Unlinks this computer. The chat folders are kept.
 
+## skill
+
+```bash
+wacli skill install [--force] | remove | show
+```
+
+Installs the agent skill embedded in this build into `~/.agents/skills/wacli`
+(read by Codex and other agents) and links it into `~/.claude/skills/wacli` when
+Claude Code is set up. A `.managed-by-wacli` marker records what wacli wrote: an
+installed skill is refreshed the first time a new build runs, and a skill wacli
+didn't install is never overwritten or removed (`--force` replaces it, moving
+the old one to `~/.agents/wacli-skill.bak-<time>`).
+
 ## completion
 
 `wacli completion bash|zsh|fish|powershell` prints a shell completion script.

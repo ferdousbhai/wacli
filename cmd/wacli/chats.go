@@ -200,12 +200,18 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				}
 				problems = append(problems, ar.Problems()...)
 			}
+			if sp, err := defaultSkillPaths(); err == nil {
+				info["agent_skill"] = string(sp.state())
+				if st := sp.state(); st != skillCurrent {
+					problems = append(problems, "agent skill "+string(st)+": run `wacli skill install`")
+				}
+			}
 			info["problems"] = problems
 			if f.asJSON {
 				return out.WriteJSON(os.Stdout, info)
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			for _, k := range []string{"archive", "store", "linked", "sync_running", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "date_format"} {
+			for _, k := range []string{"archive", "store", "linked", "sync_running", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "date_format", "agent_skill"} {
 				if v, ok := info[k]; ok {
 					fmt.Fprintf(w, "%s\t%v\n", strings.ToUpper(k), v)
 				}

@@ -5,6 +5,7 @@
 - `internal/archive/`: the data. Chat folders shaped like iPhone exports (`_chat.txt` + media), the iOS line format (render/parse), per-chat ID index, holds/flushes, repair, import merge. No whatsmeow dependency.
 - `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, backfill paging, name refresh, status.json.
 - `internal/wa/`: whatsmeow client wrapper and message parsing (only what the archiver and send use).
+- `skills/wacli/SKILL.md`: the agent skill, embedded in the binary (`skills/embed.go`) and installed by `wacli skill install`. Update it whenever commands or the archive format change.
 - `internal/config/`: store-dir resolution. `internal/lock/`: the store LOCK. `internal/delegate/`: socket/pipe transport for IPC. `internal/out/`, `internal/fsutil/`, `internal/sqliteutil/`: helpers.
 
 ## Key Architectural Facts

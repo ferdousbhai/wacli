@@ -64,6 +64,21 @@ loginctl enable-linger "$USER"   # keep it running while you're logged out
 
 `wacli doctor` shows whether it is connected and archiving.
 
+## Coding agents
+
+wacli ships with an agent skill (`skills/wacli/SKILL.md`) that tells coding
+agents where the chat folders are, how to read them, and how to send safely:
+
+```bash
+wacli skill install   # ~/.agents/skills/wacli (Codex and others), linked into ~/.claude/skills for Claude Code
+wacli skill show      # print it
+wacli skill remove
+```
+
+An installed skill updates itself when wacli is updated, and wacli never
+overwrites a skill it didn't install (`--force` adopts one, keeping a backup).
+`wacli doctor` reports its state.
+
 ## Settings
 
 | Flag | Env | Default |
