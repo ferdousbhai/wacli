@@ -261,10 +261,10 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 
 func (a *Archiver) archiveWeb(ctx context.Context, b *batch, chatID, hint string, web *waWeb.WebMessageInfo) {
 	a.names.notePush(web.GetParticipant(), web.GetPushName())
-	if web.GetMessageStubType() == waWeb.WebMessageInfo_REVOKE {
+	if t := web.GetMessageStubType(); t == waWeb.WebMessageInfo_REVOKE || t == waWeb.WebMessageInfo_ADMIN_REVOKE {
 		// A message deleted before the history sync: only its key is left.
 		pm := wa.ParseHistoryMessage(chatID, web)
-		pm.Revoked = true
+		pm.Revoked, pm.AdminRevoke = true, t == waWeb.WebMessageInfo_ADMIN_REVOKE
 		a.archiveMessage(ctx, b, pm, hint)
 		return
 	}
@@ -489,7 +489,7 @@ func formatDuration(secs int64) string {
 }
 
 func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, pm wa.ParsedMessage, row archive.Row) {
-	deletedByMe := pm.FromMe
+	deletedByMe := pm.FromMe && !pm.AdminRevoke
 	// The deleted message's own sender: an admin may delete others'.
 	if pm.TargetSender != "" {
 		if j, err := types.ParseJID(pm.TargetSender); err == nil && !j.IsEmpty() {
@@ -509,11 +509,18 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 	}
 	// The original never reached us; keep the tombstone at deletion time.
 	sender := a.senderName(ctx, pm)
+	fallback := a.isFallbackSender(pm, sender)
+	if fallback {
+		a.needsNames(c.JID())
+	}
 	_, inserted, err := c.Insert(row, func(int) archive.Entry {
 		return archive.Entry{Sender: sender, Deleted: text}
 	})
 	if inserted {
 		a.added.Add(1)
+		if fallback {
+			a.needsNames(c.JID()) // as in archiveMessage
+		}
 	}
 	a.wrote(b, c, err)
 }

@@ -62,6 +62,7 @@ type ParsedMessage struct {
 	Edited        bool
 	Revoked       bool
 	TargetSender  string // an edit or delete of someone else's message: its sender
+	AdminRevoke   bool   // deleted by a group admin, not its sender (history)
 	Call          *ParsedCallEvent
 	// UnhandledPayload names the populated waE2E.Message field when parsing
 	// extracted no content at all. Empty when the message was understood.

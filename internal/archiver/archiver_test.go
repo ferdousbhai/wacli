@@ -692,3 +692,17 @@ func TestDeletedMessagesFromHistory(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestAdminDeletedMessageFromHistory(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	stub := web(group, "H1", dana, false, t0, nil)
+	stub.Message.MessageStubType = waWeb.WebMessageInfo_ADMIN_REVOKE.Enum()
+	mine := web(group, "H2", "", true, t0+10, nil)
+	mine.Message.MessageStubType = waWeb.WebMessageInfo_ADMIN_REVOKE.Enum()
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", stub, mine))
+	want := "[2025-10-24, 04:39:33] Dana Putri: ‎This message was deleted.\r\n" +
+		"[2025-10-24, 04:39:43] Alex: ‎This message was deleted.\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
