@@ -1143,3 +1143,62 @@ func TestHandAddedLastLineKeepsPreviousID(t *testing.T) {
 		t.Errorf("B lost its ID: %v", c2.Rows())
 	}
 }
+
+// The chat's first append is cut short: there is no earlier "\r\n".
+func TestFirstLineTornFirstLineLetsRedeliveryLand(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: hel")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("hello"))
+	if got := chatText(t, c2); !strings.Contains(got, "hello") {
+		t.Errorf("redelivered message dropped; got %q", got)
+	}
+}
+
+// The first append cut between "\r" and "\n".
+func TestFirstLineTornFirstLineBeforeLF(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: hello\r")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("hello"))
+	if got := chatText(t, c2); got != "[1970-01-01, 00:05:00] Dana: hello\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// The first append cut inside its header: a fragment keeps the message's ID.
+func TestFirstLineTornFirstFragment(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:0")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("hello"))
+	if got := chatText(t, c2); !strings.Contains(got, "hello") {
+		t.Errorf("redelivered message dropped; got %q", got)
+	}
+}
+
+func TestFirstLineTornFirstMultiLineBeforeLF(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	appendFile(c.indexPath(), formatRow(Row{ID: "C", TS: 300}))
+	appendFile(c.chatPath(), "[1970-01-01, 00:05:00] Dana: a\nb\r")
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	c2.Insert(Row{ID: "C", TS: 300}, text("a\nb"))
+	if got := chatText(t, c2); got != "[1970-01-01, 00:05:00] Dana: a\nb\r\n" {
+		t.Errorf("got %q", got)
+	}
+}

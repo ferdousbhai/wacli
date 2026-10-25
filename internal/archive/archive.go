@@ -489,19 +489,28 @@ func (c *Chat) read() error {
 		return err
 	}
 	c.entries = SplitEntries(string(data))
-	if i := bytes.LastIndex(data, []byte(EntrySep)); c.torn && i >= 0 {
+	sep := []byte(EntrySep)
+	// Converted to Unix line endings: no append to tell apart.
+	unix := !bytes.Contains(data, sep) && bytes.Contains(data, []byte("\n")) && !bytes.HasSuffix(data, []byte("\r"))
+	if c.torn && !unix {
 		// Part of an append (one write of a whole line, after its index
 		// row). Cut before its final "\n" the line is whole. A fragment
 		// without its header would be glued onto the message before it:
 		// drop it. A line with its header is kept, but if it has a row its
 		// ID is not trusted: if it was cut short, the redelivered message
 		// lands whole beside it.
-		if whole := data[:i+len(EntrySep)]; bytes.HasSuffix(data, []byte("\r")) {
+		cut := 0 // where the last line starts
+		if i := bytes.LastIndex(data, sep); i >= 0 {
+			cut = i + len(sep)
+		}
+		switch tail := bytes.TrimPrefix(data[cut:], []byte("\ufeff")); {
+		case bytes.HasSuffix(data, []byte("\r")):
 			data = append(data, '\n')
 			c.entries = SplitEntries(string(data))
-		} else if e := SplitEntries(string(whole)); len(e) == len(c.entries) {
-			data, c.entries = whole, e
-		} else if len(c.rows) >= len(c.entries) {
+		case !headerRE.Match(tail):
+			data = data[:cut]
+			c.entries = SplitEntries(string(data))
+		case len(c.rows) >= len(c.entries):
 			c.rows = c.rows[:len(c.rows)-1]
 		}
 	}
