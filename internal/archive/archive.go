@@ -538,10 +538,10 @@ func (c *Chat) read() error {
 		// Every line that looks like a header started an entry, also one
 		// quoted inside a message. If every row pairs and only the extra
 		// lines don't, those lines belong to the message before them.
-		if rows := c.realign(c.entries); paired(rows) == len(c.rows) {
+		if match := c.match(c.entries); paired(match) == len(c.rows) {
 			var entries []string
 			for i, e := range c.entries {
-				if i > 0 && strings.HasPrefix(rows[i].ID, "repair:") {
+				if i > 0 && match[i] < 0 {
 					entries[len(entries)-1] += "\n" + e
 					continue
 				}
@@ -558,27 +558,49 @@ func (c *Chat) read() error {
 		// inside a message must stay put: the line split is used only if
 		// strictly more rows pair up with it.
 		if alt := SplitLines(string(data)); len(alt) > len(c.entries) && len(alt) <= len(c.rows) {
-			if rows := c.realign(alt); paired(rows) > paired(c.realign(c.entries)) {
-				c.entries, c.rows, c.torn = alt, rows, true // torn: both files rewritten
+			if paired(c.match(alt)) > paired(c.match(c.entries)) {
+				c.entries, c.rows, c.torn = alt, c.realign(alt), true // torn: both files rewritten
 			}
 		}
 	}
 	return nil
 }
 
-// paired counts the rows realign gave a real ID.
-func paired(rows []Row) int {
+// paired counts the entries matchRows paired with a row.
+func paired(match []int) int {
 	n := 0
-	for _, r := range rows {
-		if !strings.HasPrefix(r.ID, "repair:") {
+	for _, k := range match {
+		if k >= 0 {
 			n++
 		}
 	}
 	return n
 }
 
+func (c *Chat) match(entries []string) []int {
+	return matchRows(entries, c.rows, c.a.opts.DateFormat, c.a.opts.Location)
+}
+
 func (c *Chat) realign(entries []string) []Row {
 	return realign(entries, c.rows, c.a.opts.DateFormat, c.a.opts.Location)
+}
+
+// realign gives each entry its row (see matchRows). Entries without one get
+// a row WhatsApp won't recognize: they can no longer be edited or deleted,
+// but the chat keeps working.
+func realign(entries []string, rows []Row, dateFormat string, loc *time.Location) []Row {
+	out := make([]Row, len(entries))
+	var lastTS int64
+	for i, k := range matchRows(entries, rows, dateFormat, loc) {
+		if e, err := Parse(entries[i], dateFormat, loc); err == nil {
+			lastTS = e.Time.Unix()
+		}
+		out[i] = Row{ID: fmt.Sprintf("repair:%d:%d", lastTS, i), TS: lastTS}
+		if k >= 0 {
+			out[i] = rows[k]
+		}
+	}
+	return out
 }
 
 // indexTorn reports whether the index file's last row lacks its newline.
@@ -643,7 +665,8 @@ func (c *Chat) reconcile() error {
 	return nil
 }
 
-// realign pairs each entry with its index row. Both are in time order, and
+// matchRows pairs each entry with its index row and returns the row's
+// position for each entry, or -1. Both are in time order, and
 // an entry shows the time in whatever zone the computer had when it was
 // written, so an entry takes the nearest following row at the same instant
 // or at the zone shift the previous pair matched at. When neither exists the
@@ -652,10 +675,8 @@ func (c *Chat) reconcile() error {
 // next two entries pair at that shift too. Before any shift is known, the
 // first row is also accepted at such a step unconfirmed. Rows without entries (a crash
 // between writing the index and _chat.txt) can come in a run as long as a
-// history batch, so searches reach past them. Entries without a row get one
-// WhatsApp won't recognize; they can no longer be edited or deleted, but the
-// chat keeps working.
-func realign(entries []string, rows []Row, dateFormat string, loc *time.Location) []Row {
+// history batch, so searches reach past them.
+func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Location) []int {
 	const block, maxShift = 15 * 60, 26 * 3600
 	tss := make([]int64, len(entries))
 	var lastTS int64
@@ -677,7 +698,7 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 		}
 		return -1
 	}
-	out := make([]Row, len(entries))
+	out := make([]int, len(entries))
 	next := 0
 	offset, known := int64(0), false
 	// confirmed reports whether entry i can start a new shift d at row k:
@@ -710,11 +731,10 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 		if match < 0 && !known && next < len(rows) && isStep(rows[next].TS-ts) {
 			match = next // the whole chat starts shifted; nothing to confirm with
 		}
+		out[i] = match
 		if match < 0 {
-			out[i] = Row{ID: fmt.Sprintf("repair:%d:%d", ts, i), TS: ts}
 			continue
 		}
-		out[i] = rows[match]
 		offset, known = rows[match].TS-ts, true
 		next = match + 1
 	}
