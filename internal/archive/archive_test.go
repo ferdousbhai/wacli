@@ -987,3 +987,32 @@ func TestFileConvertedToUnixLineEndingsIsRestored(t *testing.T) {
 		t.Errorf("not restored:\n%q\nwant\n%q", got, orig)
 	}
 }
+
+func TestMixedLineEndingsAreRecovered(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	for i := range 5 {
+		c.Insert(Row{ID: fmt.Sprintf("m%d", i), TS: int64(100 * (i + 1))}, text(fmt.Sprint(i)))
+	}
+	orig, _ := os.ReadFile(c.chatPath())
+	os.WriteFile(c.chatPath(), []byte(strings.ReplaceAll(string(orig), "\r\n", "\n")), 0o600) // dos2unix while loaded
+	c.Insert(Row{ID: "m5", TS: 600}, text("5"))                                               // append adds one "\r\n"
+
+	b, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := b.Chat("1@s.whatsapp.net")
+	if c2.Len() != 6 || !c2.Has("m2") {
+		t.Fatalf("len %d rows %+v", c2.Len(), c2.Rows())
+	}
+	c2.Insert(Row{ID: "m2", TS: 300}, text("2")) // redelivered: must be recognised
+	if got := chatText(t, c2); strings.Count(got, "Dana: 2") != 1 || strings.Count(got, "\r\n") != 6 {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBOMAndEchoedLine(t *testing.T) {
+	got := SplitEntries("\ufeff[1970-01-01, 00:00:01] Dana: a\r\n[1970-01-01, 00:00:02] Dana: b\n")
+	if len(got) != 2 || got[0] != "[1970-01-01, 00:00:01] Dana: a" || got[1] != "[1970-01-01, 00:00:02] Dana: b" {
+		t.Errorf("got %q", got)
+	}
+}

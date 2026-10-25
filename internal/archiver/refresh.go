@@ -83,13 +83,17 @@ func (a *Archiver) RefreshNames(ctx context.Context, all bool) {
 		delete(a.namesWanted, info.JID)
 		a.mu.Unlock()
 		left := a.refreshSenders(ctx, info.JID, resolved)
-		a.mu.Lock()
-		rewanted := a.namesWanted[info.JID] // a number-named message arrived meanwhile
-		a.mu.Unlock()
-		if done := left == 0 && !rewanted && !IsFallbackName(name, info.JID); done != !info.NeedsNames {
-			if err := a.ar.UpdateInfo(info.JID, func(ci *archive.ChatInfo) { ci.NeedsNames = !done }); err != nil {
-				a.logf("warning: %v", err)
-			}
+		done := left == 0 && !IsFallbackName(name, info.JID)
+		err = a.ar.UpdateInfo(info.JID, func(ci *archive.ChatInfo) {
+			// Decided under the record's lock: a number-named message that
+			// arrived during this pass (namesWanted) keeps the flag set.
+			a.mu.Lock()
+			rewanted := a.namesWanted[info.JID]
+			a.mu.Unlock()
+			ci.NeedsNames = !done || rewanted
+		})
+		if err != nil {
+			a.logf("warning: %v", err)
 		}
 	}
 }

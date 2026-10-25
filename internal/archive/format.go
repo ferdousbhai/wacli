@@ -210,15 +210,27 @@ func renameSystemSender(raw, oldSender, newSender string) (string, bool) {
 // SplitEntries splits _chat.txt content into raw entries. A piece that does
 // not start with an entry header continues the previous entry: a message text
 // that itself contained "\r\n" (files written before Render normalized it).
+// A file without any "\r\n" (converted to Unix line ends by a script, an
+// editor or git) is split on "\n" instead; load rewrites it.
 func SplitEntries(content string) []string {
 	sep := EntrySep
 	if !strings.Contains(content, EntrySep) {
-		// Converted to Unix line ends (a script, an editor, git): entries
-		// are then told apart by their headers alone; load rewrites the
-		// file with "\r\n" again.
 		sep = "\n"
 	}
+	return splitOn(content, sep)
+}
+
+// SplitLines splits content into entries at every line that starts with an
+// entry header, whatever the line ends: for files whose endings were mixed
+// by an edit, when SplitEntries finds fewer entries than the index has rows.
+func SplitLines(content string) []string {
+	return splitOn(strings.ReplaceAll(content, EntrySep, "\n"), "\n")
+}
+
+func splitOn(content, sep string) []string {
+	content = strings.TrimPrefix(content, "\ufeff") // a BOM an editor added
 	content = strings.TrimSuffix(content, sep)
+	content = strings.TrimSuffix(content, "\n") // e.g. a line added with echo
 	if content == "" {
 		return nil
 	}

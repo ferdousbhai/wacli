@@ -490,6 +490,14 @@ func (c *Chat) read() error {
 		return err
 	}
 	c.torn = c.torn || indexTorn(c.indexPath())
+	if len(c.rows) > len(c.entries) {
+		// Line endings mixed by an edit can merge entries; splitting at
+		// every header line recovers them (only when the index says there
+		// are more, so a header-like line inside a message stays put).
+		if alt := SplitLines(string(data)); len(alt) > len(c.entries) && len(alt) <= len(c.rows) {
+			c.entries, c.torn = alt, true
+		}
+	}
 	return nil
 }
 

@@ -303,9 +303,6 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.unrendered(pm.UnhandledPayload)
 	}
 	sender := a.senderName(ctx, pm)
-	if a.isFallbackSender(pm, sender) {
-		a.needsNames(c.JID())
-	}
 	e := a.entryFor(ctx, pm, sender)
 	_, inserted, err := c.Insert(row, func(pos int) archive.Entry {
 		if pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type) {
@@ -317,6 +314,11 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	})
 	if inserted {
 		a.added.Add(1)
+		// After the insert, so a refresh pass can't clear the flag before
+		// the number-named entry exists (and redeliveries don't flag).
+		if a.isFallbackSender(pm, sender) {
+			a.needsNames(c.JID())
+		}
 	}
 	a.wrote(b, c, err)
 }
