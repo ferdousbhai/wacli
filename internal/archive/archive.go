@@ -319,7 +319,7 @@ func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error
 // uses; own is the chat's current folder, which doesn't count as taken.
 func (a *Archive) freeFolderLocked(name, suffix, jid, own string) string {
 	// Short enough for a file system's 255-byte names, with a suffix.
-	base := folderStart + strings.TrimSpace(truncateBytes(sanitizeFileName(name), 180))
+	base := folderStart + strings.TrimSpace(truncateBytes(sanitizeFileName(name), folderNameBytes))
 	if strings.TrimSpace(name) == "" {
 		base = folderStart + strings.SplitN(jid, "@", 2)[0]
 	}

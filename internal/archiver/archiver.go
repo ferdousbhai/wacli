@@ -296,8 +296,8 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	case pm.Edited && c.Has(pm.ID):
 		edit := a.entryFor(ctx, pm, "") // a document's caption and label, as when sent
 		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
-			if edit.DocLabel == "" {
-				edit.DocLabel = e.DocLabel
+			if e.DocLabel != "" {
+				edit.DocLabel = e.DocLabel // the file's label doesn't change
 			}
 			if e.Deleted != "" || (e.Text == edit.Text && e.DocLabel == edit.DocLabel && e.Edited) {
 				return false

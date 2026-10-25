@@ -50,3 +50,19 @@ func writeFileT(t *testing.T, p, s string) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseDocLabelWithShortName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		pages uint32
+	}{{"1.pdf", 1}, {"a.pdf", 3}, {"t.txt", 0}, {"page.pdf", 2}} {
+		label := DocLabel(tc.name, tc.pages)
+		e := Entry{Time: time.Unix(0, 0).UTC(), Sender: "Dana", Text: "cap", DocLabel: label, Attachment: AttachmentName(3, "document", time.Unix(0, 0), tc.name)}
+		got, _ := Parse(Render(e, DefaultDateFormat), DefaultDateFormat, time.UTC)
+		if got.DocLabel != label || got.Text != "cap" {
+			t.Errorf("%s: text %q label %q", tc.name, got.Text, got.DocLabel)
+		}
+	}
+}
+
+func TestEditAttachedShortNamedDocKeepsLabel(t *testing.T) { editDoc(t, "a.pdf", true) }

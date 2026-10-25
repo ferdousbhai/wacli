@@ -161,8 +161,12 @@ func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 			if _, name, ok := strings.Cut(label, "-"); ok {
 				label = name
 			}
-			label = strings.TrimSuffix(label, filepath.Ext(label))
-			if j := strings.LastIndex(body, label); j >= 0 && label != "" {
+			j := strings.LastIndex(body, label)
+			if j < 0 { // shortened: match by the stem
+				label = strings.TrimSuffix(label, filepath.Ext(label))
+				j = strings.LastIndex(body, label)
+			}
+			if j >= 0 && label != "" {
 				e.DocLabel = body[j:]
 				body = strings.TrimSuffix(body[:j], " ")
 			}
@@ -342,10 +346,12 @@ func IsBidiMark(r rune) bool {
 	return r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
 
-// truncateName shortens the stem to max runes, keeping the extension, as iOS
-// does ("Restructuring Invoice - PT. Acme Holding.pdf").
-// maxFolderBytes is the longest name most file systems allow.
-const maxFolderBytes = 255
+// maxFolderBytes is the longest name most file systems allow; a chat's name
+// is cut to folderNameBytes, leaving room for the prefix and a suffix.
+const (
+	maxFolderBytes  = 255
+	folderNameBytes = 180
+)
 
 // truncateBytes cuts s to at most max bytes, at a character boundary.
 func truncateBytes(s string, max int) string {
@@ -359,6 +365,8 @@ func truncateBytes(s string, max int) string {
 	return strings.TrimSpace(s)
 }
 
+// truncateName shortens the stem to max runes, keeping the extension, as iOS
+// does ("Restructuring Invoice - PT. Acme Holding.pdf").
 func truncateName(name string, max int) string {
 	ext := filepath.Ext(name)
 	stem := []rune(strings.TrimSuffix(name, ext))
