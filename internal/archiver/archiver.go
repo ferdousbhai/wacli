@@ -40,7 +40,8 @@ type Archiver struct {
 	closed   bool
 
 	added        atomic.Int64
-	lastActivity atomic.Int64
+	lastActivity atomic.Int64 // when something was last archived; 0: not yet
+	started      time.Time
 	namesChanged chan struct{}
 
 	mu          sync.Mutex
@@ -62,6 +63,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		wa:           client,
 		names:        newNames(client),
 		status:       newStatusTracker(ar.Root()),
+		started:      time.Now(),
 		logf:         logf,
 		ctx:          context.Background(),
 		cancel:       func() {},
@@ -75,7 +77,6 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		return nil, err
 	}
 	a.media = q
-	a.touch()
 	return a, nil
 }
 
@@ -129,9 +130,14 @@ func (a *Archiver) Close() {
 
 func (a *Archiver) Added() int64 { return a.added.Load() }
 
-// Idle reports how long it has been since the last archived change.
+// Idle reports how long it has been since the last archived change, or
+// since the archiver started.
 func (a *Archiver) Idle() time.Duration {
-	return time.Since(time.Unix(0, a.lastActivity.Load()))
+	t := a.lastActivity.Load()
+	if t == 0 {
+		return time.Since(a.started)
+	}
+	return time.Since(time.Unix(0, t))
 }
 
 func (a *Archiver) touch() { a.lastActivity.Store(time.Now().UnixNano()) }

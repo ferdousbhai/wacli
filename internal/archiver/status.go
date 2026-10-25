@@ -123,7 +123,9 @@ func (a *Archiver) writeStatus() {
 	t.mu.Lock()
 	defer t.mu.Unlock() // also serializes writers of the file
 	t.s.UpdatedAt = time.Now()
-	t.s.LastArchived = time.Unix(0, a.lastActivity.Load())
+	if v := a.lastActivity.Load(); v != 0 {
+		t.s.LastArchived = time.Unix(0, v)
+	}
 	t.s.NewMessages = a.added.Load()
 	t.s.PendingMedia = a.media.len()
 	t.s.Problems = a.ar.Problems()

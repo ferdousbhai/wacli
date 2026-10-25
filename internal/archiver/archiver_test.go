@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -46,6 +47,10 @@ func newTestArchiver(t *testing.T) (*Archiver, *archive.Archive) {
 		t.Fatal(err)
 	}
 	if err := device.Contacts.PutContactName(ctx, types.NewJID("6281111111111", types.DefaultUserServer), "Dana", "Dana Putri"); err != nil {
+		t.Fatal(err)
+	}
+	// A profile name whatsmeow kept from an earlier run.
+	if _, _, err := device.Contacts.PutPushName(ctx, types.NewJID("6283333333333", types.DefaultUserServer), "Kim"); err != nil {
 		t.Fatal(err)
 	}
 	container.Close()
@@ -739,5 +744,31 @@ func TestYouLeftAndLiveIconChange(t *testing.T) {
 	want := "[2025-10-24, 04:39:33] Maya: ‎You left\r\n[2025-10-24, 04:40:33] Maya: ‎Dana Putri changed this group's icon\r\n"
 	if got := chatFile(t, ar, group); got != want {
 		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestStoredProfileNameAfterRestart(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, "6283333333333@s.whatsapp.net", "G1", false, t0, text("hello")))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:33] ~\u202fKim: hello\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDiskFullPausesWithoutUsingTries(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	p := &pendingMedia{Chat: dana, ID: "M1", Name: "00000001-PHOTO-1970-01-01-00-00-00.jpg"}
+	a.media.items[p.key()] = p
+	a.media.failed(p, fmt.Errorf("write: %w", syscall.ENOSPC))
+	if q := a.media.items[p.key()]; q == nil || q.Attempts != 0 || time.Until(q.NextTry) < 10*time.Minute {
+		t.Errorf("got %+v", q)
+	}
+}
+
+func TestLastArchivedIsUnsetUntilSomethingIsArchived(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.writeStatus()
+	if st, _ := ReadStatus(ar.Root()); !st.LastArchived.IsZero() {
+		t.Errorf("last archived %v before anything was", st.LastArchived)
 	}
 }

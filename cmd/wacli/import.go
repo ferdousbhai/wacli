@@ -75,7 +75,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	}
 	c, err := ar.Chat(jid.String())
 	if err != nil {
-		return nil, fmt.Errorf("%s is not archived yet; run `wacli sync` first: %w", jid, err)
+		return nil, fmt.Errorf("%s isn't archived, so there is no chat to merge the export into: %w", jid, err)
 	}
 	entries, err := ar.ReadExport(dir)
 	if err != nil {

@@ -77,6 +77,7 @@ func (n *names) contact(ctx context.Context, jid types.JID) string {
 	if jid.Server == types.HiddenUserServer {
 		pn = n.wa.ResolveLIDToPN(ctx, jid)
 	}
+	var stored string // a profile name whatsmeow kept from earlier messages
 	for _, candidate := range []types.JID{pn, jid} {
 		if candidate.IsEmpty() {
 			continue
@@ -90,13 +91,19 @@ func (n *names) contact(ctx context.Context, jid types.JID) string {
 				return s
 			}
 		}
+		if stored == "" {
+			stored = strings.TrimSpace(info.PushName)
+		}
 	}
 	n.mu.Lock()
-	push := n.push[pn.User]
+	push := n.push[pn.User] // seen in this run: newer than the stored one
 	if push == "" {
 		push = n.push[jid.User]
 	}
 	n.mu.Unlock()
+	if push == "" {
+		push = stored
+	}
 	if push != "" {
 		return pushPrefix + push
 	}

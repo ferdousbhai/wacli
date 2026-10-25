@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ferdousbhai/wacli/internal/fsutil"
@@ -58,6 +59,12 @@ type mediaQueue struct {
 	// on disk yet; settle writes those chats once and then dequeues them.
 	placed     map[string][]string // chat JID → item keys
 	placedKeys map[string]bool     // the same keys; due skips them
+
+	diskFullLogged bool
+}
+
+func diskFull(err error) bool {
+	return errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT) || errors.Is(err, syscall.EROFS)
 }
 
 const mediaWorkers = 8
@@ -454,6 +461,17 @@ func (q *mediaQueue) failed(p *pendingMedia, err error) {
 	if !ok {
 		return
 	}
+	if diskFull(err) {
+		// Not the file's fault: wait for space without using up its tries.
+		if !q.diskFullLogged {
+			q.a.logf("disk full or read-only (%v); downloads paused", err)
+			q.diskFullLogged = true
+		}
+		cur.NextTry = time.Now().Add(15 * time.Minute)
+		q.saveLocked()
+		return
+	}
+	q.diskFullLogged = false
 	cur.Attempts++
 	switch {
 	case p.Gone:
