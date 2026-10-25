@@ -197,7 +197,11 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				info["linked"] = isLinked(filepath.Join(f.storeDir, "session.db"))
 			}
 			var problems []string
-			if st, err := archiver.ReadStatus(ar.Root()); err == nil {
+			st, stErr := archiver.ReadStatus(ar.Root())
+			if !running && info["linked"] == true && st.Halted == "" && !st.LoggedOut {
+				problems = append(problems, "sync is not running, so the archive isn't being updated (`systemctl --user start wacli-sync`)")
+			}
+			if stErr == nil {
 				info["connected"] = running && st.Connected
 				if !st.LastArchived.IsZero() {
 					info["last_archived"] = st.LastArchived.Format(time.RFC3339)
@@ -206,9 +210,6 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				info["pending_media"] = st.PendingMedia
 				if st.Halted != "" && !running {
 					problems = append(problems, "sync stopped at "+st.HaltedAt.Format(time.RFC3339)+": "+st.Halted)
-				}
-				if !running && st.Halted == "" && !st.LoggedOut && info["linked"] == true {
-					problems = append(problems, "sync is not running, so the archive isn't being updated (`systemctl --user start wacli-sync`)")
 				}
 				if st.LoggedOut {
 					problems = append(problems, "WhatsApp unlinked this computer at "+st.LoggedOutAt.Format(time.RFC3339)+"; run `wacli auth`")

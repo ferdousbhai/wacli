@@ -598,15 +598,15 @@ func TestMediaGivesUpAfterThreeTriesAndKeepsItsScheduleAcrossRestarts(t *testing
 	a, ar := newTestArchiver(t)
 	p := &pendingMedia{Chat: dana, ID: "M1", Name: "00000001-PHOTO-1970-01-01-00-00-00.jpg"}
 	a.media.items[p.key()] = p
-	a.media.failed(p, fmt.Errorf("no answer"))
+	a.media.failed(p, fmt.Errorf("no answer"), true)
 	a.media.flush()
 	b, _ := New(ar, nil, nil) // a restart
 	q := b.media.items[p.key()]
 	if q == nil || time.Until(q.NextTry) < 10*time.Minute {
 		t.Fatalf("schedule lost on restart: %+v", q)
 	}
-	b.media.failed(q, fmt.Errorf("no answer"))
-	b.media.failed(q, fmt.Errorf("no answer"))
+	b.media.failed(q, fmt.Errorf("no answer"), true)
+	b.media.failed(q, fmt.Errorf("no answer"), true)
 	if b.media.len() != 0 {
 		t.Errorf("still queued after three tries")
 	}
@@ -759,7 +759,7 @@ func TestDiskFullPausesWithoutUsingTries(t *testing.T) {
 	a, _ := newTestArchiver(t)
 	p := &pendingMedia{Chat: dana, ID: "M1", Name: "00000001-PHOTO-1970-01-01-00-00-00.jpg"}
 	a.media.items[p.key()] = p
-	a.media.failed(p, fmt.Errorf("write: %w", syscall.ENOSPC))
+	a.media.failed(p, fmt.Errorf("write: %w", syscall.ENOSPC), false)
 	if q := a.media.items[p.key()]; q == nil || q.Attempts != 0 || time.Until(q.NextTry) < 10*time.Minute {
 		t.Errorf("got %+v", q)
 	}
@@ -770,5 +770,16 @@ func TestLastArchivedIsUnsetUntilSomethingIsArchived(t *testing.T) {
 	a.writeStatus()
 	if st, _ := ReadStatus(ar.Root()); !st.LastArchived.IsZero() {
 		t.Errorf("last archived %v before anything was", st.LastArchived)
+	}
+}
+
+func TestLastArchivedSurvivesARestart(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, dana, "M1", false, t0, text("hi")))
+	a.writeStatus()
+	b, _ := New(ar, nil, nil)
+	b.writeStatus()
+	if st, _ := ReadStatus(ar.Root()); st.LastArchived.IsZero() {
+		t.Error("last archived lost on restart")
 	}
 }

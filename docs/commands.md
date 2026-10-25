@@ -100,7 +100,7 @@ Shows where the archive and session live, whether this computer is linked,
 whether sync is running and connected (from `.wacli/status.json`, which sync
 updates every 30 seconds), when it last archived something, how many chats
 have complete history and how many attachments are pending, then any problems:
-unlinked, sync silent or disconnected, sync stopped by WhatsApp (and why),
+unlinked, sync not running, silent or disconnected, sync stopped by WhatsApp (and why),
 chats whose files had to be repaired.
 `--check` also reads every chat and reports what it would repair, changing
 nothing.

@@ -336,27 +336,30 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 	// Download outside the chat folder: a rename may move the folder
 	// meanwhile, and PlaceAttachment puts the file wherever it is then.
 	tmp := filepath.Join(q.tmpDir(), fmt.Sprintf("%x.part", sha256.Sum256([]byte(p.key()))))
-	if p.Direct == "" {
+	askedPhone := p.Direct == ""
+	if askedPhone {
 		// No server copy to fetch; only the phone can upload it.
 		err = q.retryFromPhone(ctx, p, tmp)
 	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, tmp); err != nil && isExpired(err) {
+		askedPhone = true
 		err = q.retryFromPhone(ctx, p, tmp)
 	}
 	if err != nil {
 		if q.a.ctx.Err() != nil || !q.a.wa.IsConnected() {
 			return // shutting down or offline: not the file's fault; stays queued
 		}
-		q.failed(p, err)
+		q.failed(p, err, askedPhone)
 		return
 	}
 	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name); err != nil {
 		_ = os.Remove(tmp)
-		q.failed(p, err)
+		q.failed(p, err, askedPhone)
 		return
 	}
 	q.mu.Lock()
 	q.placed[p.Chat] = append(q.placed[p.Chat], p.key())
 	q.placedKeys[p.key()] = true
+	q.diskFullLogged = false // space again: a later full disk is logged anew
 	q.mu.Unlock()
 	q.a.touch()
 }
@@ -454,14 +457,16 @@ func (q *mediaQueue) queued(chat, id string) bool {
 // up. Most retries ask the phone, so they are few.
 var retryAfter = []time.Duration{15 * time.Minute, 2 * time.Hour}
 
-func (q *mediaQueue) failed(p *pendingMedia, err error) {
+// failed counts a try, unless the disk is full and the phone wasn't asked
+// (each ask shows on the phone, so those stay limited).
+func (q *mediaQueue) failed(p *pendingMedia, err error, askedPhone bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	cur, ok := q.items[p.key()]
 	if !ok {
 		return
 	}
-	if diskFull(err) {
+	if diskFull(err) && !askedPhone {
 		// Not the file's fault: wait for space without using up its tries.
 		if !q.diskFullLogged {
 			q.a.logf("disk full or read-only (%v); downloads paused", err)

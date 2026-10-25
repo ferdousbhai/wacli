@@ -67,6 +67,7 @@ func newStatusTracker(archiveRoot string) *statusTracker {
 	// Why the last sync stopped stays on show until a connection succeeds.
 	if old, err := ReadStatus(archiveRoot); err == nil {
 		s.LoggedOut, s.LoggedOutAt, s.Halted, s.HaltedAt = old.LoggedOut, old.LoggedOutAt, old.Halted, old.HaltedAt
+		s.LastArchived = old.LastArchived
 	}
 	return &statusTracker{s: s, loggedOut: make(chan struct{}), halted: make(chan struct{})}
 }
