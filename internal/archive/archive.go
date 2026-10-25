@@ -391,13 +391,10 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 		}
 		info.PrevFolder = ""
 	}
-	info.Name = name
-	err = a.saveMetaLocked()
 	a.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
 
+	// The system lines are written before the new name is recorded, even
+	// during a Hold: once chats.json has it, no later pass renames them.
 	if err := c.useLocked(); err != nil {
 		return "", err
 	}
@@ -411,10 +408,17 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 			}
 		}
 	}
-	if changed {
-		return folder, c.saveLocked()
+	if changed || c.dirty {
+		c.dirty = true
+		if err := c.flushLocked(); err != nil {
+			return "", err
+		}
 	}
-	return folder, nil
+	a.mu.Lock()
+	info.Name = name
+	err = a.saveMetaLocked()
+	a.mu.Unlock()
+	return folder, err
 }
 
 // Chat is one export folder. Methods are safe for concurrent use; the
