@@ -20,6 +20,7 @@ type MergeResult struct {
 	Matched       int // already in the chat
 	Added         int // new entries
 	MediaRestored int // "omitted" entries that got their file
+	Skipped       int // dated in the future
 }
 
 // matchWindow absorbs the second WhatsApp sometimes adds between a message's
@@ -49,6 +50,12 @@ func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string, move b
 		}
 		id, found := c.find(in, used)
 		if !found {
+			// A line dated in the future (a forged export) would sit after
+			// every live message, making each one rewrite the chat.
+			if in.Time.After(time.Now().Add(24 * time.Hour)) {
+				res.Skipped++
+				continue
+			}
 			add = append(add, i)
 			continue
 		}
@@ -166,6 +173,11 @@ func (c *Chat) importFile(id, name, srcDir string, move bool) (bool, error) {
 		return false, fmt.Errorf("unsafe attachment name %q", name)
 	}
 	src := filepath.Join(srcDir, base)
+	// An export holds plain files; a symlink, FIFO or device named like an
+	// attachment (in a folder someone sent) is treated as missing.
+	if fi, err := os.Lstat(src); err != nil || !fi.Mode().IsRegular() {
+		return false, nil
+	}
 	if !move {
 		// Never move the user's own files: copy them to the temp folder.
 		in, err := os.Open(src)

@@ -85,8 +85,12 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	return fmt.Sprintf("%s: %d already archived, %d added, %d attachments restored",
-		filepath.Base(c.Dir()), res.Matched, res.Added, res.MediaRestored), nil
+	msg := fmt.Sprintf("%s: %d already archived, %d added, %d attachments restored",
+		filepath.Base(c.Dir()), res.Matched, res.Added, res.MediaRestored)
+	if res.Skipped > 0 {
+		msg += fmt.Sprintf(", %d skipped (dated in the future)", res.Skipped)
+	}
+	return msg, nil
 }
 
 // exportChatName is the chat name in an export's file or folder name
