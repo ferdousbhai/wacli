@@ -1,27 +1,21 @@
+---
+title: doctor
+description: "Check link status, sync health and the archive."
+---
+
 # doctor
 
-Read when: diagnosing store layout, auth state, FTS/search support, locks, or optional live connectivity.
-
-`wacli doctor` reports local health information and can optionally connect to WhatsApp.
-
-## Command
-
 ```bash
-wacli doctor [--connect]
+wacli doctor [--check] [--json]
 ```
 
-## Notes
+Shows where the archive and session live, whether this computer is linked,
+whether `sync` is running and connected, when it last archived something, how
+many chats have complete history, and how many attachments are pending. It
+reads `.wacli/status.json`, which a running sync updates every 30 seconds.
 
-- Without `--connect`, doctor avoids live WhatsApp connection.
-- `--connect` requires auth and the store lock, and waits for confirmed WhatsApp login before reporting `connected: true`. A socket handshake alone is not a successful login.
-- Output includes local store counts, auth identity when available, FTS/search state, lock details, and `session_revoked`. An observed remote logout reports `authenticated: false` and `connection_state: "logged_out"` even when an old device row remains. Rejected or timed-out login attempts retain that state; confirmed login clears it.
-- `--json` includes `store.last_activity_at` when a `HEARTBEAT` file is present, reflecting the last time `sync --follow` recorded observed activity. It is not a process-liveness marker; quiet healthy sessions may not update it because successful keepalives are silent. `store.last_sync_at` instead records a successful connected sync or offline-backlog completion. It stays unknown until this state is recorded after upgrading; message timestamps do not establish freshness. Retrieval returns the same value in `source.last_sync_at`, with `null` for unknown state.
-- Use `--json` for machine-readable diagnostics.
+Problems are listed at the end: WhatsApp unlinked this computer (sync exits
+with status 3 so a service stops restarting; run `wacli auth`), sync running
+but silent or disconnected, chats whose index had to be rebuilt.
 
-## Examples
-
-```bash
-wacli doctor
-wacli doctor --json
-wacli doctor --connect
-```
+`--check` opens every chat and verifies its files; stop sync first.

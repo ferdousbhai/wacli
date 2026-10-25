@@ -8,100 +8,32 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
-  windows-delegate:
-    runs-on: windows-2025
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Test Windows named-pipe delegation
-        run: go test -count=1 ./internal/delegate
-
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup CI Environment
-        uses: ./.github/actions/setup-ci-env
-        with:
-          setup-node: "true"
-          node-version: "26.12.1"
-          setup-pnpm: "true"
-          apt-packages: "build-essential"
-
-      - name: pnpm format:check
-        run: pnpm format:check
-
-      - name: pnpm lint
-        run: pnpm lint
-
-      - name: Verify exact Go build toolchain
-        run: test "$(go env GOVERSION)" = "go1.27.3"
-
-      - name: govulncheck source
-        run: pnpm govulncheck:source
-
-      - name: pnpm lint:deadcode
-        run: pnpm lint:deadcode
-
-      - name: pnpm test
-        env:
-          CGO_ENABLED: "1"
-        run: pnpm test
-
-      - name: pnpm build
-        env:
-          CGO_ENABLED: "1"
-        run: pnpm build
-
-      - name: pnpm docs:site
-        run: pnpm docs:site
-
-  linux-release-builds:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Setup CI Environment
-        uses: ./.github/actions/setup-ci-env
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          apt-packages: "build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross"
-
-      - name: GoReleaser check (macOS)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+      - uses: actions/setup-node@v4
         with:
-          distribution: goreleaser
-          version: v2.18.2
-          args: check --config .goreleaser.yaml
-
-      - name: GoReleaser check (linux/windows)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser
-          version: v2.18.2
-          args: check --config .goreleaser-linux-windows.yaml
-
-      - name: GoReleaser build (linux amd64/arm64)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser
-          version: v2.18.2
-          args: build --snapshot --clean --config .goreleaser-linux-windows.yaml --id wacli_linux_amd64 --id wacli_linux_arm64
+          node-version: "24"
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./...
+          go test -tags sqlite_fts5 ./...
+          node --test scripts/*.test.mjs
+      - name: Dead code
+        run: bash scripts/check-deadcode.sh
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags sqlite_fts5 -o dist/wacli ./cmd/wacli

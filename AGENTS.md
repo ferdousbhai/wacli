@@ -1,25 +1,22 @@
 # Repository Guidelines
 
 ## Project Structure
-- `cmd/wacli/`: CLI command wiring (auth, sync, messages, send, media, contacts, chats, groups, history, presence, doctor).
-- `internal/app/`: core app, whatsmeow event handling, backfill, sync idle logic.
-- `internal/store/`: SQLite schema, migrations, FTS5 search, chats/contacts/groups/messages/media queries.
-- `internal/wa/`: whatsmeow client wrapper, JID resolution, message parsing (text, business, media, context).
-- `internal/config/`: store-dir resolution (`WACLI_STORE_DIR` env → XDG state dir on Linux → `~/.wacli`).
-- `internal/lock/`: platform-specific LOCK-file locking; acquired before all write commands.
-- `internal/out/`: JSON + table output helpers; all human text goes through here.
-- `internal/fsutil/`: enforces 0700/0600 owner-only permissions on store files.
-- `internal/pathutil/`: sanitises StorePath; rejects `?` and `#` to prevent URI injection.
-- `internal/sqliteutil/`: sqlite file helpers.
-- Tests sit next to the code they cover (`*_test.go`).
+- `cmd/wacli/`: CLI wiring (auth, sync, backfill, import, chats, send, doctor, logout) and the IPC that lets `send`/`backfill`/`import` run inside a running `sync --follow`.
+- `internal/archive/`: the data. Chat folders shaped like iPhone exports (`_chat.txt` + media), the iOS line format (render/parse), per-chat ID index, merge of phone exports. No whatsmeow dependency.
+- `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, page-by-page backfill.
+- `internal/wa/`: whatsmeow client wrapper and message parsing.
+- `internal/config/`: store-dir resolution (`WACLI_STORE_DIR` → XDG state dir on Linux → `~/.wacli`).
+- `internal/lock/`: LOCK file on the store dir; one process owns the WhatsApp session.
+- `internal/delegate/`: local socket/pipe transport for IPC.
+- `internal/out/`, `internal/fsutil/`, `internal/pathutil/`, `internal/sqliteutil/`: helpers.
 
 ## Key Architectural Facts
-- **Two databases**: `session.db` (managed by whatsmeow) + `wacli.db` (app data, FTS5 search).
-- **FTS5 table** is a separate trigger-synced table in `wacli.db`; requires `-tags sqlite_fts5` at build time.
-- **Store lock**: a `LOCK` file in the store dir is acquired before any write operation; `--lock-wait` controls the wait timeout.
-- **Read-only mode**: `--read-only` flag or `WACLI_READONLY=1` env; write commands exit immediately with a clear error.
-- **Send retry**: bounded 45 s attempt timeout; retries once after reconnect for stale-session / usync-timeout errors.
-- **Store path precedence**: `--store` flag → `WACLI_STORE_DIR` env → XDG `~/.local/state/wacli` on Linux (legacy `~/.wacli` fallback) → `~/.wacli` elsewhere.
+- **The folders are the data.** `~/WhatsApp/WhatsApp Chat - <name>/_chat.txt` must stay byte-compatible with an iPhone export; `internal/archive/testdata` and `WACLI_REFERENCE_EXPORT` (a real export, never committed) check that.
+- **Bookkeeping lives in `<archive>/.wacli/`**: `chats.json` (JID → folder, backfill cursor), `index/<jid>.tsv` (one row per entry, same order: msg id, ts, from_me, sender), `pending-media.json`.
+- **`session.db`** (whatsmeow, SQLite) is the only database: login and Signal keys.
+- **Writes**: appends for the newest message; anything else rewrites the file to a temp file and renames it.
+- **Backfill** follows the phone's page order (last message of each page), not timestamps.
+- Spec: `docs/archive.md`.
 
 ## Build, Test, and Development Commands
 - Build: `pnpm build` — compiles with `-tags sqlite_fts5` and `CGO_CFLAGS=-Wno-error=missing-braces` (required for GCC 15+).

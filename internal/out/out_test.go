@@ -74,10 +74,3 @@ func TestWriteErrorJSONAndText(t *testing.T) {
 		t.Fatalf("unexpected text error output: %q", b.String())
 	}
 }
-
-func TestSanitizeBodyPreservesMessageLayout(t *testing.T) {
-	got := SanitizeBody("one\n\ttwo\x1b[31m\rthree\x7f")
-	if got != "one\n\ttwothree" {
-		t.Fatalf("SanitizeBody = %q", got)
-	}
-}

@@ -69,6 +69,7 @@ func extractMedia(m *waProto.Message, pm *ParsedMessage) {
 			Type:          "document",
 			Caption:       doc.GetCaption(),
 			Filename:      doc.GetFileName(),
+			PageCount:     doc.GetPageCount(),
 			MimeType:      doc.GetMimetype(),
 			DirectPath:    doc.GetDirectPath(),
 			MediaKey:      clone(doc.GetMediaKey()),

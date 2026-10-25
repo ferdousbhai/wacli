@@ -23,6 +23,7 @@ type Media struct {
 	FileSHA256    []byte
 	FileEncSHA256 []byte
 	FileLength    uint64
+	PageCount     uint32
 }
 
 type Location struct {
@@ -88,6 +89,7 @@ type ParsedMessage struct {
 	ReplyToID        string
 	ReplyToSenderJID string
 	ReplyToDisplay   string
+	MentionedJIDs    []string
 	ReactionToID     string
 	ReactionEmoji    string
 	IsForwarded      bool
@@ -265,6 +267,7 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) *waProto.Message {
 		if quoted := ctx.GetQuotedMessage(); quoted != nil {
 			pm.ReplyToDisplay = strings.TrimSpace(displayTextForProto(quoted))
 		}
+		pm.MentionedJIDs = append([]string(nil), ctx.GetMentionedJID()...)
 		pm.ForwardingScore = ctx.GetForwardingScore()
 		pm.IsForwarded = ctx.GetIsForwarded() || pm.ForwardingScore > 0
 	}

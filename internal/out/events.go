@@ -20,14 +20,6 @@ type eventEnvelope struct {
 	TS    int64          `json:"ts"`
 }
 
-func NewEventWriter(w io.Writer, enabled bool) *EventWriter {
-	return &EventWriter{
-		w:        w,
-		enabled:  enabled,
-		clockNow: time.Now,
-	}
-}
-
 func (e *EventWriter) Enabled() bool {
 	return e != nil && e.enabled && e.w != nil
 }

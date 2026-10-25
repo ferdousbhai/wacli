@@ -173,9 +173,3 @@ func displayTextForProto(m *waProto.Message) string {
 	}
 	return ""
 }
-
-// MessageDisplayText returns the same compact message summary used for quoted
-// context during sync.
-func MessageDisplayText(m *waProto.Message) string {
-	return displayTextForProto(m)
-}

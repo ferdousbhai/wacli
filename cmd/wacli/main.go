@@ -1,98 +1,124 @@
+// Command wacli keeps WhatsApp chats as iPhone-style export folders.
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
-	"runtime"
-	"strings"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
 
-	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/store"
-	"google.golang.org/protobuf/proto"
+	"github.com/ferdousbhai/wacli/internal/archive"
+	"github.com/ferdousbhai/wacli/internal/config"
+	"github.com/ferdousbhai/wacli/internal/out"
+	"github.com/spf13/cobra"
 )
 
+const version = "0.26.0-archive"
+
+type rootFlags struct {
+	storeDir   string
+	archiveDir string
+	dateFormat string
+	asJSON     bool
+}
+
+// errUnlinked exits with exitUnlinked so a service manager stops restarting
+// (systemd: RestartPreventExitStatus=3) until someone runs `wacli auth`.
+var errUnlinked = errors.New("this computer is not linked to WhatsApp (or was unlinked); run `wacli auth`")
+
+const exitUnlinked = 3
+
 func main() {
-	configureOutputSignals()
-	applyDeviceLabel()
-	if err := execute(os.Args[1:]); err != nil {
+	if err := newRoot().Execute(); err != nil {
+		if errors.Is(err, errUnlinked) {
+			os.Exit(exitUnlinked)
+		}
 		os.Exit(1)
 	}
 }
 
-func applyDeviceLabel() {
-	label := strings.TrimSpace(os.Getenv("WACLI_DEVICE_LABEL"))
-	platformRaw := strings.TrimSpace(os.Getenv("WACLI_DEVICE_PLATFORM"))
-	if platformRaw == "" {
-		platformRaw = "DESKTOP"
-	}
-	if label == "" {
-		label = detectDeviceLabel(runtime.GOOS, os.Hostname, os.ReadFile)
-	}
-	platform := parsePlatformType(platformRaw)
-	store.DeviceProps.PlatformType = platform.Enum()
-	if label == "" {
-		label = "wacli"
-	}
+func newRoot() *cobra.Command {
+	f := &rootFlags{}
+	root := &cobra.Command{
+		Use:   "wacli",
+		Short: "Keep WhatsApp chats as iPhone-style export folders",
+		Long: `wacli links to WhatsApp as a companion device and keeps every chat as a
+folder shaped like an iPhone "Export chat → Attach Media" export:
 
-	store.SetOSInfo(label, [3]uint32{0, 1, 0})
-	store.BaseClientPayload.UserAgent.Device = proto.String(label)
-	store.BaseClientPayload.UserAgent.Manufacturer = proto.String(label)
+  ~/WhatsApp/WhatsApp Chat - <name>/_chat.txt  (+ media files)
+
+Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	root.PersistentFlags().StringVar(&f.storeDir, "store", envOr("WACLI_STORE_DIR", config.DefaultStoreDir()), "directory holding the WhatsApp session (session.db)")
+	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the chat folders")
+	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", envOr("WACLI_DATE_FORMAT", archive.DefaultDateFormat), "Go time layout for entry timestamps, matching your phone's region")
+	root.PersistentFlags().BoolVar(&f.asJSON, "json", false, "print machine-readable JSON")
+
+	root.AddCommand(
+		newAuthCmd(f),
+		newSyncCmd(f),
+		newBackfillCmd(f),
+		newChatsCmd(f),
+		newImportCmd(f),
+		newSendCmd(f),
+		newDoctorCmd(f),
+		newLogoutCmd(f),
+	)
+	wrapErrors(root, f)
+	return root
 }
 
-func parsePlatformType(raw string) waCompanionReg.DeviceProps_PlatformType {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return waCompanionReg.DeviceProps_CHROME
+// wrapErrors prints command errors once, as JSON when asked.
+func wrapErrors(c *cobra.Command, f *rootFlags) {
+	for _, sub := range c.Commands() {
+		wrapErrors(sub, f)
 	}
-	value = strings.ToUpper(value)
-	if enumValue, ok := waCompanionReg.DeviceProps_PlatformType_value[value]; ok {
-		return waCompanionReg.DeviceProps_PlatformType(enumValue)
+	if c.RunE == nil {
+		return
 	}
-	return waCompanionReg.DeviceProps_CHROME
-}
-
-func detectDeviceLabel(goos string, hostname func() (string, error), readFile func(string) ([]byte, error)) string {
-	host, _ := hostname()
-	host = strings.TrimSpace(host)
-	osName := friendlyOSName(goos, readFile)
-	switch {
-	case host != "" && osName != "":
-		return "wacli - " + osName + " (" + host + ")"
-	case host != "":
-		return "wacli - " + host
-	case osName != "":
-		return "wacli - " + osName
-	default:
-		return "wacli"
-	}
-}
-
-func friendlyOSName(goos string, readFile func(string) ([]byte, error)) string {
-	switch goos {
-	case "darwin":
-		return "macOS"
-	case "linux":
-		return linuxDistroName(readFile)
-	case "windows":
-		return "Windows"
-	default:
-		return goos
+	run := c.RunE
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		err := run(cmd, args)
+		if err != nil {
+			_ = out.WriteError(os.Stderr, f.asJSON, err)
+		}
+		return err
 	}
 }
 
-func linuxDistroName(readFile func(string) ([]byte, error)) string {
-	data, err := readFile("/etc/os-release")
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func defaultArchiveDir() string {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "Linux"
+		return "WhatsApp"
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || key != "PRETTY_NAME" {
-			continue
-		}
-		value = strings.Trim(strings.TrimSpace(value), `"`)
-		if value != "" {
-			return value
-		}
+	return filepath.Join(home, "WhatsApp")
+}
+
+func (f *rootFlags) openArchive() (*archive.Archive, error) {
+	if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
+		return nil, fmt.Errorf("--date-format: %w", err)
 	}
-	return "Linux"
+	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local})
+}
+
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func logf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }

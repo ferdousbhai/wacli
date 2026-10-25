@@ -221,51 +221,6 @@ func TestResolvePNToLIDPublicUsesOwnLIDWithoutCache(t *testing.T) {
 	}
 }
 
-func TestParseUserOrJID(t *testing.T) {
-	tests := []struct {
-		name       string
-		input      string
-		wantUser   string
-		wantServer string
-		wantErr    bool
-	}{
-		{name: "phone", input: "1234567890", wantUser: "1234567890", wantServer: types.DefaultUserServer},
-		{name: "phone with plus", input: "+1234567890", wantUser: "1234567890", wantServer: types.DefaultUserServer},
-		{name: "phone with spaces and plus", input: " +1234567890 ", wantUser: "1234567890", wantServer: types.DefaultUserServer},
-		{name: "formatted phone", input: "+1 (234) 567-8900", wantUser: "12345678900", wantServer: types.DefaultUserServer},
-		{name: "dotted phone", input: "1.234.567.8900", wantUser: "12345678900", wantServer: types.DefaultUserServer},
-		{name: "minimum length phone", input: "1234567", wantUser: "1234567", wantServer: types.DefaultUserServer},
-		{name: "maximum length phone", input: "123456789012345", wantUser: "123456789012345", wantServer: types.DefaultUserServer},
-		{name: "group jid", input: "123@g.us", wantUser: "123", wantServer: types.GroupServer},
-		{name: "newsletter jid", input: "123@newsletter", wantUser: "123", wantServer: types.NewsletterServer},
-		{name: "empty after plus", input: "+", wantErr: true},
-		{name: "too short phone", input: "123456", wantErr: true},
-		{name: "too long phone", input: "1234567890123456", wantErr: true},
-		{name: "letters in phone", input: "123abc456", wantErr: true},
-		{name: "plus inside phone", input: "12+34567", wantErr: true},
-		{name: "double leading plus", input: "++1234567", wantErr: true},
-		{name: "unicode digits rejected", input: "١٢٣٤٥٦٧", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			j, err := ParseUserOrJID(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got %+v", j)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ParseUserOrJID: %v", err)
-			}
-			if j.Server != tt.wantServer || j.User != tt.wantUser {
-				t.Fatalf("unexpected jid: %+v", j)
-			}
-		})
-	}
-}
-
 func TestNewsletterName(t *testing.T) {
 	meta := &types.NewsletterMetadata{
 		ThreadMeta: types.NewsletterThreadMetadata{

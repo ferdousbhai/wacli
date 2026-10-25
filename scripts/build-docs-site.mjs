@@ -8,23 +8,21 @@ import { escapeAttr, escapeHtml, renderMarkdown, tocFromHeadings, validateLinks 
 const root = process.cwd();
 const docsDir = path.join(root, "docs");
 const outDir = path.join(root, "dist", "docs-site");
-const repoBase = "https://github.com/openclaw/wacli";
+const repoBase = "https://github.com/ferdousbhai/wacli";
 const repoEditBase = `${repoBase}/edit/main/docs`;
 const cname = readCname();
 const siteBase = cname ? `https://${cname}` : "";
 
 const productName = "wacli";
-const productTagline = "WhatsApp in your terminal";
+const productTagline = "WhatsApp chats as plain folders";
 const productDescription =
   "A single Go CLI that pairs as a linked WhatsApp Web device, mirrors message history into local SQLite with FTS5 search, and exposes send, media, contact, and group workflows for terminals, scripts, and coding agents.";
-const brewInstall = "brew install openclaw/tap/wacli";
+const brewInstall = "go install -tags sqlite_fts5 github.com/ferdousbhai/wacli/cmd/wacli@latest";
 
 const sections = [
-  ["Start", ["index.md", "install.md", "quickstart.md", "overview.md"]],
-  ["Auth & Sync", ["auth.md", "accounts.md", "sync.md", "history.md", "doctor.md"]],
-  ["Messages", ["messages.md", "send.md", "media.md", "presence.md", "channels.md"]],
-  ["Contacts & Groups", ["contacts.md", "contacts-import-system.md", "chats.md", "groups.md", "profile.md"]],
-  ["Reference", ["spec.md", "docs.md", "store.md", "integrations.md", "completion.md", "version.md", "help.md", "release.md"]],
+  ["Start", ["index.md", "install.md", "quickstart.md", "archive.md"]],
+  ["Commands", ["auth.md", "sync.md", "backfill.md", "import.md", "chats.md", "send.md", "doctor.md"]],
+  ["Reference", ["completion.md", "release.md"]],
 ];
 
 const buildExcludes = [];
@@ -259,7 +257,7 @@ function homeHero(page) {
         <div class="home-cta">
           <a class="btn btn-primary" href="${quickstartRel}">Quickstart</a>
           <a class="btn btn-ghost" href="${repoBase}" rel="noopener">GitHub</a>
-          <div class="home-install" aria-label="Install with Homebrew">
+          <div class="home-install" aria-label="Install">
             <span class="prompt" aria-hidden="true">$</span>
             <code>${escapeHtml(brewInstall)}</code>
           </div>

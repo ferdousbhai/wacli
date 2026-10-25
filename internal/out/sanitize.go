@@ -38,31 +38,6 @@ func SanitizeHuman(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func SanitizeBody(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size == 1 {
-			i++
-			continue
-		}
-		if r == '\x1b' {
-			i += escapeSequenceLen(s[i:])
-			continue
-		}
-		switch {
-		case r == '\n' || r == '\t':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-		default:
-			b.WriteRune(r)
-		}
-		i += size
-	}
-	return b.String()
-}
-
 func escapeSequenceLen(s string) int {
 	if len(s) < 2 || s[0] != '\x1b' {
 		return 1

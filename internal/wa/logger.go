@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openclaw/wacli/internal/out"
+	"github.com/ferdousbhai/wacli/internal/out"
 	signalLog "go.mau.fi/libsignal/logger"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -22,11 +22,6 @@ func init() {
 }
 
 var libsignalEvents atomic.Pointer[out.EventWriter]
-
-// SetLibsignalEvents selects the process-wide diagnostic sink before a command runs.
-func SetLibsignalEvents(events *out.EventWriter) {
-	libsignalEvents.Store(events)
-}
 
 type libsignalLogger struct{}
 

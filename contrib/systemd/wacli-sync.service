@@ -1,0 +1,14 @@
+[Unit]
+Description=wacli: keep WhatsApp chats as export folders
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=%h/go/bin/wacli sync --follow
+Restart=on-failure
+RestartSec=30
+# Exit 3: unlinked from WhatsApp; restarting would not help. Run `wacli auth`.
+RestartPreventExitStatus=3
+
+[Install]
+WantedBy=default.target

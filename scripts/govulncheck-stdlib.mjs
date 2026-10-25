@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { RELEASE_GOVULNCHECK_VERSION } from "./release-common.mjs";
+const RELEASE_GOVULNCHECK_VERSION = "v1.8.0";
 
 export function parseJsonStream(text) {
   const values = [];

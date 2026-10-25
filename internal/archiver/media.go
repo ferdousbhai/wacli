@@ -1,0 +1,387 @@
+package archiver
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/ferdousbhai/wacli/internal/archive"
+	"github.com/ferdousbhai/wacli/internal/wa"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+)
+
+// pendingMedia is an attachment whose entry says "… omitted" until the file
+// is downloaded. Kept in .wacli/pending-media.json so restarts resume.
+type pendingMedia struct {
+	Chat      string    `json:"chat"`    // archive chat JID
+	WAChat    string    `json:"wa_chat"` // chat JID as WhatsApp addressed it
+	ID        string    `json:"id"`
+	Sender    string    `json:"sender"`
+	FromMe    bool      `json:"from_me"`
+	TS        int64     `json:"ts"`
+	Name      string    `json:"name"` // file name in the chat folder
+	Type      string    `json:"type"`
+	Direct    string    `json:"direct_path"`
+	Key       []byte    `json:"media_key"`
+	SHA256    []byte    `json:"sha256"`
+	EncSHA256 []byte    `json:"enc_sha256"`
+	Length    uint64    `json:"length"`
+	Attempts  int       `json:"attempts"`
+	NextTry   time.Time `json:"next_try"`
+	Gone      bool      `json:"gone,omitempty"` // phone no longer has it
+}
+
+func (p pendingMedia) key() string { return p.Chat + "|" + p.ID }
+
+type mediaQueue struct {
+	a    *Archiver
+	path string
+
+	mu      sync.Mutex
+	items   map[string]*pendingMedia
+	active  map[string]bool
+	wake    chan struct{}
+	retries map[string]chan *events.MediaRetry
+	dirty   bool
+}
+
+const mediaWorkers = 8
+
+func newMediaQueue(a *Archiver) (*mediaQueue, error) {
+	q := &mediaQueue{
+		a:       a,
+		path:    filepath.Join(a.ar.Root(), ".wacli", "pending-media.json"),
+		items:   map[string]*pendingMedia{},
+		active:  map[string]bool{},
+		wake:    make(chan struct{}, 1),
+		retries: map[string]chan *events.MediaRetry{},
+	}
+	data, err := os.ReadFile(q.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if len(data) > 0 {
+		var list []*pendingMedia
+		if err := json.Unmarshal(data, &list); err != nil {
+			return nil, err
+		}
+		for _, p := range list {
+			p.NextTry = time.Time{} // retry everything on start
+			q.items[p.key()] = p
+		}
+	}
+	return q, nil
+}
+
+func (q *mediaQueue) add(c *archive.Chat, pm wa.ParsedMessage, name string) {
+	m := pm.Media
+	p := &pendingMedia{
+		Chat: c.JID(), WAChat: pm.Chat.String(), ID: pm.ID, Sender: pm.SenderJID, FromMe: pm.FromMe,
+		TS: pm.Timestamp.Unix(), Name: name, Type: m.Type, Direct: m.DirectPath, Key: m.MediaKey,
+		SHA256: m.FileSHA256, EncSHA256: m.FileEncSHA256, Length: m.FileLength,
+	}
+	q.mu.Lock()
+	q.items[p.key()] = p
+	q.saveLocked()
+	q.mu.Unlock()
+	q.poke()
+}
+
+func (q *mediaQueue) forget(chat, id string) {
+	q.mu.Lock()
+	delete(q.items, chat+"|"+id)
+	q.saveLocked()
+	q.mu.Unlock()
+}
+
+func (q *mediaQueue) len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := 0
+	for _, p := range q.items {
+		if !p.Gone {
+			n++
+		}
+	}
+	return n
+}
+
+func (q *mediaQueue) poke() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+// saveLocked marks the queue for saving; the saver writes it at most every
+// couple of seconds (the queue can hold thousands of items).
+func (q *mediaQueue) saveLocked() { q.dirty = true }
+
+// flush writes the queue if it changed.
+func (q *mediaQueue) flush() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.dirty {
+		q.writeLocked()
+		q.dirty = false
+	}
+}
+
+func (q *mediaQueue) writeLocked() {
+	list := make([]*pendingMedia, 0, len(q.items))
+	for _, p := range q.items {
+		list = append(list, p)
+	}
+	data, err := json.MarshalIndent(list, "", " ")
+	if err != nil {
+		return
+	}
+	tmp := q.path + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, q.path)
+	}
+}
+
+func (q *mediaQueue) start(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				q.flush()
+				return
+			case <-t.C:
+				q.flush()
+			}
+		}
+	}()
+	jobs := make(chan *pendingMedia)
+	for range mediaWorkers {
+		go func() {
+			for p := range jobs {
+				q.download(ctx, p)
+				q.mu.Lock()
+				delete(q.active, p.key())
+				q.mu.Unlock()
+				q.poke()
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		tick := time.NewTicker(30 * time.Second)
+		defer tick.Stop()
+		for {
+			for _, p := range q.due() {
+				select {
+				case jobs <- p:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-q.wake:
+			case <-tick.C:
+			}
+		}
+	}()
+}
+
+func (q *mediaQueue) due() []*pendingMedia {
+	if !q.a.wa.IsConnected() {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := time.Now()
+	var out []*pendingMedia
+	for k, p := range q.items {
+		if p.Gone || q.active[k] || now.Before(p.NextTry) {
+			continue
+		}
+		q.active[k] = true
+		cp := *p
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// wait returns once nothing is downloadable right now.
+func (q *mediaQueue) wait(ctx context.Context) {
+	for {
+		q.mu.Lock()
+		busy := len(q.active) > 0
+		now := time.Now()
+		for _, p := range q.items {
+			if !p.Gone && !now.Before(p.NextTry) {
+				busy = true
+			}
+		}
+		q.mu.Unlock()
+		if !busy || !q.a.wa.IsConnected() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
+	c, err := q.a.ar.Chat(p.Chat)
+	if err != nil {
+		q.forget(p.Chat, p.ID)
+		return
+	}
+	if e, _, ok := c.Get(p.ID); !ok || e.Attachment != "" || e.Deleted != "" {
+		// Gone, deleted, or already restored by `wacli import`.
+		q.forget(p.Chat, p.ID)
+		return
+	}
+	if !archive.Downloadable(p.Type) {
+		// Queued by older versions (locations); nothing to download.
+		q.dropUndownloadable(c, p)
+		return
+	}
+	target := filepath.Join(c.Dir(), p.Name)
+	if p.Direct == "" {
+		// No server copy to fetch; only the phone can upload it.
+		err = q.retryFromPhone(ctx, p, target)
+	} else if _, err = q.a.wa.DownloadMediaToFile(ctx, p.Direct, p.EncSHA256, p.SHA256, p.Key, p.Length, p.Type, "", target); err != nil && isExpired(err) {
+		err = q.retryFromPhone(ctx, p, target)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return // shutting down; it stays queued for next time
+		}
+		q.failed(p, err)
+		return
+	}
+	_, err = c.Update(p.ID, func(e *archive.Entry, _ int) bool {
+		if e.Deleted != "" {
+			return false
+		}
+		e.Omitted, e.Attachment = "", p.Name
+		return true
+	})
+	if err != nil {
+		q.a.logf("warning: %v", err)
+		return
+	}
+	q.forget(p.Chat, p.ID)
+	q.a.touch()
+}
+
+func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
+	_, err := c.Update(p.ID, func(e *archive.Entry, _ int) bool {
+		if e.Omitted == "" {
+			return false
+		}
+		text := "Location"
+		if e.Text != "" {
+			text += ": " + e.Text
+		}
+		*e = archive.Entry{Time: e.Time, Sender: e.Sender, System: true, Text: text}
+		return true
+	})
+	if err != nil {
+		q.a.logf("warning: %v", err)
+	}
+	q.forget(p.Chat, p.ID)
+}
+
+func (q *mediaQueue) failed(p *pendingMedia, err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	cur, ok := q.items[p.key()]
+	if !ok {
+		return
+	}
+	cur.Attempts++
+	cur.Gone = p.Gone
+	backoff := time.Duration(1<<min(cur.Attempts, 10)) * time.Minute
+	cur.NextTry = time.Now().Add(backoff)
+	q.saveLocked()
+	if cur.Gone {
+		q.a.logf("media unavailable on phone: %s %s", p.Chat, p.Name)
+	} else if cur.Attempts == 1 {
+		q.a.logf("media download failed (%v), will retry: %s", err, p.Name)
+	}
+}
+
+// retryFromPhone asks the phone to re-upload expired media.
+func (q *mediaQueue) retryFromPhone(ctx context.Context, p *pendingMedia, target string) error {
+	chat, err := types.ParseJID(p.WAChat)
+	if err != nil {
+		return err
+	}
+	info := &types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: chat, IsFromMe: p.FromMe, IsGroup: chat.Server == types.GroupServer},
+		ID:            p.ID,
+		Timestamp:     time.Unix(p.TS, 0),
+	}
+	if s, err := types.ParseJID(p.Sender); err == nil {
+		info.Sender = s
+	}
+	ch := make(chan *events.MediaRetry, 1)
+	q.mu.Lock()
+	q.retries[p.ID] = ch
+	q.mu.Unlock()
+	defer func() {
+		q.mu.Lock()
+		delete(q.retries, p.ID)
+		q.mu.Unlock()
+	}()
+	if err := q.a.wa.SendMediaRetryReceipt(ctx, info, p.Key); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(60 * time.Second):
+		return errors.New("phone did not answer media retry")
+	case evt := <-ch:
+		path, code, err := wa.DecryptMediaRetry(evt, p.Key)
+		if err != nil {
+			return err
+		}
+		if code == wa.MediaRetryNotFound {
+			p.Gone = true
+			return errors.New("media no longer on phone")
+		}
+		if code != wa.MediaRetrySuccess || path == "" {
+			return errors.New("phone could not re-upload media")
+		}
+		_, err = q.a.wa.DownloadRetriedMediaToFile(ctx, path, p.SHA256, p.Key, p.Length, p.Type, target)
+		return err
+	}
+}
+
+func (q *mediaQueue) onRetry(evt *events.MediaRetry) {
+	q.mu.Lock()
+	ch := q.retries[string(evt.MessageID)]
+	q.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+func isExpired(err error) bool {
+	return errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) ||
+		errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) ||
+		errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410)
+}

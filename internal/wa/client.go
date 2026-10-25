@@ -585,3 +585,13 @@ func (c *Client) ReconnectWithBackoff(ctx context.Context, minDelay, maxDelay ti
 		}
 	}
 }
+
+// OwnPushName is the profile name of the linked account.
+func (c *Client) OwnPushName() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil || c.client.Store == nil {
+		return ""
+	}
+	return c.client.Store.PushName
+}

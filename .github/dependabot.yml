@@ -1,0 +1,11 @@
+# WhatsApp changes its protocol; whatsmeow follows it. Keep it current.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

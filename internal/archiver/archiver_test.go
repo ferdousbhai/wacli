@@ -1,0 +1,362 @@
+package archiver
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ferdousbhai/wacli/internal/archive"
+	"github.com/ferdousbhai/wacli/internal/sqliteutil"
+	"github.com/ferdousbhai/wacli/internal/wa"
+	"go.mau.fi/whatsmeow/proto/waAdv"
+	"go.mau.fi/whatsmeow/proto/waCommon"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	me    = "15550000000@s.whatsapp.net"
+	dana  = "6281111111111@s.whatsapp.net"
+	group = "120363000000000001@g.us"
+)
+
+func newTestArchiver(t *testing.T) (*Archiver, *archive.Archive) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.db")
+	ctx := context.Background()
+	container, err := sqlstore.New(ctx, "sqlite3", sqliteutil.FileURI(path, "_foreign_keys=on"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := container.NewDevice()
+	device.ID = &types.JID{User: "15550000000", Device: 7, Server: types.DefaultUserServer}
+	device.PushName = "Alex"
+	device.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{1}, AccountSignature: make([]byte, 64), AccountSignatureKey: make([]byte, 32), DeviceSignature: make([]byte, 64)}
+	if err := device.Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := device.Contacts.PutContactName(ctx, types.NewJID("6281111111111", types.DefaultUserServer), "Dana", "Dana Putri"); err != nil {
+		t.Fatal(err)
+	}
+	container.Close()
+
+	client, err := wa.New(wa.Options{StorePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	ar, err := archive.Open(archive.Options{Root: filepath.Join(dir, "WhatsApp"), Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(ar, client, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.names.noteGroup(group, "Maya")
+	return a, ar
+}
+
+func chatFile(t *testing.T, ar *archive.Archive, jid string) string {
+	t.Helper()
+	c, err := ar.Chat(jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(c.Dir(), archive.ChatFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func web(chat, id, participant string, fromMe bool, ts int64, msg *waE2E.Message) *waHistorySync.HistorySyncMsg {
+	return &waHistorySync.HistorySyncMsg{Message: &waWeb.WebMessageInfo{
+		Key:              &waCommon.MessageKey{RemoteJID: proto.String(chat), FromMe: proto.Bool(fromMe), ID: proto.String(id), Participant: optional(participant)},
+		MessageTimestamp: proto.Uint64(uint64(ts)),
+		Message:          msg,
+	}}
+}
+
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func text(s string) *waE2E.Message { return &waE2E.Message{Conversation: proto.String(s)} }
+
+func history(syncType waHistorySync.HistorySync_HistorySyncType, chat, name string, msgs ...*waHistorySync.HistorySyncMsg) *events.HistorySync {
+	return &events.HistorySync{Data: &waHistorySync.HistorySync{
+		SyncType:      syncType.Enum(),
+		Conversations: []*waHistorySync.Conversation{{ID: proto.String(chat), Name: optional(name), Messages: msgs}},
+	}}
+}
+
+func live(chat, sender, id string, fromMe bool, ts int64, msg *waE2E.Message) *events.Message {
+	c, _ := types.ParseJID(chat)
+	s, _ := types.ParseJID(sender)
+	return &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{Chat: c, Sender: s, IsFromMe: fromMe, IsGroup: c.Server == types.GroupServer},
+			ID:            types.MessageID(id),
+			Timestamp:     time.Unix(ts, 0),
+		},
+		Message: msg,
+	}
+}
+
+const t0 = 1761280773 // 2025-10-24 04:39:33 UTC
+
+func TestHistoryThenLiveMessagesBuildExport(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	// History arrives newest first and overlapping, like real syncs.
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya",
+		web(group, "M3", dana, false, t0+300, text("Thank u Alex")),
+		web(group, "M1", "", true, t0+60, text("Key points:\n- restructure\n- KITAS")),
+	))
+	a.handle(history(waHistorySync.HistorySync_RECENT, group, "Maya",
+		web(group, "M2", dana, false, t0+120, text("Will send the invoice")),
+		web(group, "M1", "", true, t0+60, text("Key points:\n- restructure\n- KITAS")),
+	))
+	a.handle(live(group, dana, "M4", false, t0+400, text("Hi @15550000000 any update?")))
+	a.handle(live(group, me, "M5", true, t0+500, text("Please refund")))
+
+	want := "[2025-10-24, 04:40:33] Alex: Key points:\n- restructure\n- KITAS\r\n" +
+		"[2025-10-24, 04:41:33] Dana Putri: Will send the invoice\r\n" +
+		"[2025-10-24, 04:44:33] Dana Putri: Thank u Alex\r\n" +
+		"[2025-10-24, 04:46:13] Dana Putri: Hi @15550000000 any update?\r\n" +
+		"[2025-10-24, 04:47:53] Alex: Please refund\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("_chat.txt:\n%s\nwant:\n%s", got, want)
+	}
+	if c, _ := ar.Chat(group); filepath.Base(c.Dir()) != "WhatsApp Chat - Maya" {
+		t.Errorf("folder %s", c.Dir())
+	}
+}
+
+func TestMentionsRenderLikeIOS(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	msg := &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+		Text:        proto.String("Hi @6281111111111 ready?"),
+		ContextInfo: &waE2E.ContextInfo{MentionedJID: []string{dana}},
+	}}
+	a.handle(live(group, me, "M1", true, t0, msg))
+	if got := chatFile(t, ar, group); !strings.Contains(got, "Hi @⁨Dana Putri⁩ ready?") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestEditAndDeleteRewriteTheEntry(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(dana, dana, "M1", false, t0, text("Thanks")))
+	a.handle(live(dana, dana, "M2", false, t0+10, text("wrong chat")))
+	a.handle(live(dana, dana, "E1", false, t0+20, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		Key:           &waCommon.MessageKey{RemoteJID: proto.String(dana), ID: proto.String("M1")},
+		EditedMessage: text("Thank u Alex"),
+	}}))
+	a.handle(live(dana, dana, "R1", false, t0+30, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
+		Key:  &waCommon.MessageKey{RemoteJID: proto.String(dana), ID: proto.String("M2")},
+	}}))
+	want := "[2025-10-24, 04:39:33] Dana Putri: Thank u Alex ‎<This message was edited>\r\n" +
+		"[2025-10-24, 04:39:43] Dana Putri: ‎This message was deleted.\r\n"
+	if got := chatFile(t, ar, dana); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestMediaEntryWaitsForDownload(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+		Caption: proto.String("🙏"), DirectPath: proto.String("/v/t62/x"), MediaKey: make([]byte, 32),
+		FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32), FileLength: proto.Uint64(10),
+	}}
+	a.handle(live(group, me, "M1", true, t0, text("transfer done")))
+	a.handle(live(group, me, "M2", true, t0+60, img))
+	got := chatFile(t, ar, group)
+	if !strings.HasSuffix(got, "‎[2025-10-24, 04:40:33] Alex: 🙏 ‎image omitted\r\n") {
+		t.Errorf("before download: %q", got)
+	}
+	if a.PendingMedia() != 1 {
+		t.Fatalf("pending = %d", a.PendingMedia())
+	}
+	// Simulate the worker finishing: file on disk, entry updated.
+	c, _ := ar.Chat(group)
+	name := "00000001-PHOTO-2025-10-24-04-40-33.jpg"
+	if err := os.WriteFile(filepath.Join(c.Dir(), name), []byte("jpg"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.Update("M2", func(e *archive.Entry, _ int) bool { e.Omitted, e.Attachment = "", name; return true })
+	got = chatFile(t, ar, group)
+	if !strings.HasSuffix(got, "‎[2025-10-24, 04:40:33] Alex: 🙏 ‎<attached: "+name+">\r\n") {
+		t.Errorf("after download: %q", got)
+	}
+}
+
+func TestDocumentsKeepNameAndPageCount(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	doc := &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+		FileName: proto.String("Restructuring Invoice - PT. Acme Holdings Indonesia.pdf"), PageCount: proto.Uint32(4),
+		DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32), FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32),
+	}}
+	a.handle(live(group, dana, "D1", false, t0, doc))
+	want := "‎[2025-10-24, 04:39:33] Dana Putri: Restructuring Invoice - PT. Acme Holdings Indonesia.pdf • ‎4 pages ‎document omitted\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	a.media.mu.Lock()
+	var name string
+	for _, p := range a.media.items {
+		name = p.Name
+	}
+	a.media.mu.Unlock()
+	if name != "00000000-Restructuring Invoice - PT. Acme Holding.pdf" {
+		t.Errorf("attachment name %q", name)
+	}
+}
+
+func TestSystemStubsAttributedToChat(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	create := &waHistorySync.HistorySyncMsg{Message: &waWeb.WebMessageInfo{
+		Key:                   &waCommon.MessageKey{RemoteJID: proto.String(group), FromMe: proto.Bool(true), ID: proto.String("S1")},
+		MessageTimestamp:      proto.Uint64(t0),
+		MessageStubType:       waWeb.WebMessageInfo_GROUP_CREATE.Enum(),
+		MessageStubParameters: []string{"ACME HOLDINGS"},
+	}}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", create))
+	want := "[2025-10-24, 04:39:33] Maya: ‎You created group “ACME HOLDINGS”\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+// The bug that started this: an old message already on disk made backfill
+// stop before the gap in the middle of the chat.
+func TestBackfillCursorWalksFromNewest(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya",
+		web(group, "OLD", "", true, t0, text("You were added")),
+		web(group, "NEW", "", true, t0+86400*300, text("final notice")),
+	))
+	c, _ := ar.Chat(group)
+	cur := newestAnchor(c.Rows())
+	if cur == nil || cur.ID != "NEW" {
+		t.Fatalf("anchor = %+v, want NEW (not the stray oldest message)", cur)
+	}
+	// An on-demand page answering from NEW fills the gap and moves the cursor.
+	got := make(chan historyBatch, 1)
+	a.backfill[group] = got
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, group, "Maya",
+		web(group, "GAP2", dana, false, t0+7200, text("Invoice attached")),
+		web(group, "GAP1", dana, false, t0+3600, text("Thank u")),
+	))
+	b := <-got
+	if b.last == nil || b.last.ID != "GAP1" {
+		t.Fatalf("batch last = %+v", b.last)
+	}
+	if n := c.Len(); n != 4 {
+		t.Errorf("entries = %d, want 4", n)
+	}
+}
+
+func TestInvisibleMessagesAreSkipped(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, group, "Maya",
+		web(group, "BODILESS", me, false, t0, nil),
+		web(group, "M1", dana, false, t0+1, text("hello")),
+	))
+	a.handle(live(me, me, "P1", true, t0+2, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_APP_STATE_SYNC_KEY_SHARE.Enum(),
+	}}))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:34] Dana Putri: hello\r\n" {
+		t.Errorf("got %q", got)
+	}
+	if _, ok := ar.Info(me); ok {
+		t.Error("protocol traffic created a self chat folder")
+	}
+}
+
+func TestRefreshNamesFixesNumberSenders(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	c, _, _ := ar.EnsureChat(dana, "+6281111111111", "dm", "")
+	c.Insert(archive.Row{ID: "M1", TS: t0, Sender: dana}, func(int) archive.Entry {
+		return archive.Entry{Sender: "+6281111111111", Text: "U too"}
+	})
+	a.RefreshNames(context.Background())
+	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Dana Putri: U too\r\n" {
+		t.Errorf("got %q", got)
+	}
+	if c2, _ := ar.Chat(dana); filepath.Base(c2.Dir()) != "WhatsApp Chat - Dana Putri" {
+		t.Errorf("folder %s", c2.Dir())
+	}
+}
+
+func TestRefreshNamesFixesOwnName(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	c, _, _ := ar.EnsureChat(dana, "Dana Putri", "dm", "")
+	c.Insert(archive.Row{ID: "M1", TS: t0, FromMe: true, Sender: me}, func(int) archive.Entry {
+		return archive.Entry{Sender: "You", Text: "Hello"}
+	})
+	a.RefreshNames(context.Background())
+	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Alex: Hello\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestLocationIsALineNotMedia(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	loc := &waE2E.Message{LocationMessage: &waE2E.LocationMessage{DegreesLatitude: proto.Float64(48.85), DegreesLongitude: proto.Float64(2.35), Name: proto.String("Old Town")}}
+	a.handle(live(dana, dana, "L1", false, t0, loc))
+	if got := chatFile(t, ar, dana); got != "[2025-10-24, 04:39:33] Dana Putri: ‎Location: https://maps.google.com/?q=48.850000,2.350000\r\n" {
+		t.Errorf("got %q", got)
+	}
+	if a.PendingMedia() != 0 {
+		t.Errorf("location queued as media")
+	}
+}
+
+func TestHistoryBatchWritesOnce(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	var msgs []*waHistorySync.HistorySyncMsg
+	for i := 50; i > 0; i-- { // newest first, as the phone sends it
+		msgs = append(msgs, web(group, fmt.Sprintf("M%02d", i), dana, false, t0+int64(i), text(fmt.Sprint(i))))
+	}
+	a.handle(history(waHistorySync.HistorySync_FULL, group, "Maya", msgs...))
+	got := chatFile(t, ar, group)
+	if n := strings.Count(got, "\r\n"); n != 50 {
+		t.Fatalf("entries = %d", n)
+	}
+	if !strings.HasPrefix(got, "[2025-10-24, 04:39:34] Dana Putri: 1\r\n") {
+		t.Errorf("order: %q", got[:60])
+	}
+}
+
+func TestStatusTracksConnectionAndLogout(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(&events.Connected{})
+	if st, err := ReadStatus(ar.Root()); err != nil || !st.Connected {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	a.handle(&events.LoggedOut{})
+	select {
+	case <-a.LoggedOut():
+	default:
+		t.Fatal("LoggedOut not signalled")
+	}
+	if st, _ := ReadStatus(ar.Root()); !st.LoggedOut || st.Connected {
+		t.Errorf("status %+v", st)
+	}
+}

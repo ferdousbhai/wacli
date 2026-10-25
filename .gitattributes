@@ -1,0 +1,2 @@
+# iOS exports end entries with \r\n; keep the bytes exactly.
+internal/archive/testdata/** -text whitespace=cr-at-eol

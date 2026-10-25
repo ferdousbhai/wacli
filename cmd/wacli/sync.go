@@ -1,161 +1,102 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"time"
 
-	appPkg "github.com/openclaw/wacli/internal/app"
-	"github.com/openclaw/wacli/internal/out"
+	"github.com/ferdousbhai/wacli/internal/out"
+	"github.com/ferdousbhai/wacli/internal/wa"
 	"github.com/spf13/cobra"
 )
 
-func newSyncCmd(flags *rootFlags) *cobra.Command {
-	var once bool
-	var follow bool
-	var idleExit time.Duration
-	var maxReconnect time.Duration
-	var staleThreshold time.Duration
-	var presenceModeFlag string
-	var downloadMedia bool
-	var refreshContacts bool
-	var refreshGroups bool
-	var refreshChannels bool
-	var webhookURL string
-	var webhookSecret string
-	var webhookAllowPrivate bool
-	var webhookEventsFlag string
-	var sendSpacingFlag string
-	var storage syncStorageLimitFlags
-
+func newAuthCmd(f *rootFlags) *cobra.Command {
+	var phone string
+	var days int
+	var idle time.Duration
 	cmd := &cobra.Command{
-		Use:   "sync",
-		Short: "Sync messages (requires prior auth; never shows QR)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := flags.requireWritable(); err != nil {
-				return err
-			}
-			storage.maxMessagesSet = cmd.Flags().Changed("max-messages")
-			maxMessages, maxDBSize, err := resolveSyncStorageLimits(storage)
+		Use:   "auth",
+		Short: "Link this computer to WhatsApp and archive your full history",
+		Long: `Shows a QR code to scan in WhatsApp → Linked devices (or prints a pairing
+code with --phone), asks the phone for its full history, and archives it with
+all media. Linking again replaces the previous link.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			wa.SetHistorySyncLimits(wa.HistorySyncLimits{Full: true, Days: uint32(days)})
+			s, err := openSession(f)
 			if err != nil {
 				return err
 			}
-			if webhookSecret != "" && webhookURL == "" {
-				return fmt.Errorf("--webhook-secret requires --webhook")
+			defer s.close()
+			ctx, cancel := signalContext()
+			defer cancel()
+			if s.wa.IsAuthed() {
+				fmt.Fprintln(os.Stderr, "Already linked; syncing. Run `wacli logout` first to link again with full history.")
 			}
-			if cmd.Flags().Changed("webhook-events") && webhookURL == "" {
-				return fmt.Errorf("--webhook-events requires --webhook")
-			}
-			webhookEvents, err := appPkg.ParseSyncWebhookEvents(webhookEventsFlag)
-			if err != nil {
+			opts := wa.ConnectOptions{AllowQR: true, PairPhoneNumber: phone, OnPairCode: func(code string) {
+				fmt.Fprintf(os.Stderr, "Enter this code in WhatsApp → Linked devices → Link with phone number: %s\n", code)
+			}}
+			if err := s.start(ctx, opts); err != nil {
 				return err
 			}
-			if staleThreshold != 0 && staleThreshold < time.Second {
-				return fmt.Errorf("--stale-threshold must be at least 1s, got %s", staleThreshold)
-			}
-			sendSpacing, err := parseSendSpacing(sendSpacingFlag)
-			if err != nil {
-				return err
-			}
-			if maxStaleThreshold := appPkg.MaxStaleThreshold(); staleThreshold >= maxStaleThreshold {
-				return fmt.Errorf("--stale-threshold must be less than %s because whatsmeow auto-reconnects after that much keepalive failure, got %s", maxStaleThreshold, staleThreshold)
-			}
-			presenceMode, err := appPkg.ParseSyncPresenceMode(presenceModeFlag)
-			if err != nil {
-				return err
-			}
-			ctx, stop := signalContextWithEvents(out.NewEventWriter(os.Stderr, flags.events))
-			defer stop()
-
-			a, lk, err := newApp(ctx, flags, true, false)
-			if err != nil {
-				return err
-			}
-			defer closeApp(a, lk)
-
-			if err := a.EnsureAuthed(ctx); err != nil {
-				return err
-			}
-
-			mode := appPkg.SyncModeFollow
-			if once {
-				mode = appPkg.SyncModeOnce
-			} else if follow {
-				mode = appPkg.SyncModeFollow
-			} else {
-				mode = appPkg.SyncModeOnce
-			}
-
-			var stopSendDelegate func()
-			defer func() {
-				if stopSendDelegate != nil {
-					stopSendDelegate()
-				}
-			}()
-			var afterConnect func(context.Context) error
-			if mode == appPkg.SyncModeFollow {
-				afterConnect = func(ctx context.Context) error {
-					stop, err := startSendDelegateServer(ctx, a, sendSpacing)
-					if err != nil {
-						return err
-					}
-					stopSendDelegate = stop
-					return nil
-				}
-			}
-
-			res, err := a.Sync(ctx, appPkg.SyncOptions{
-				Mode:                mode,
-				PresenceMode:        presenceMode,
-				AllowQR:             false,
-				AfterConnect:        afterConnect,
-				DownloadMedia:       downloadMedia,
-				RefreshContacts:     refreshContacts,
-				RefreshGroups:       refreshGroups,
-				RefreshChannels:     refreshChannels,
-				IdleExit:            idleExit,
-				MaxReconnect:        maxReconnect,
-				StaleThreshold:      staleThreshold,
-				MaxMessages:         maxMessages,
-				MaxDBSizeBytes:      maxDBSize,
-				WarnNoLimits:        true,
-				WebhookURL:          webhookURL,
-				WebhookSecret:       webhookSecret,
-				WebhookAllowPrivate: webhookAllowPrivate,
-				WebhookEvents:       webhookEvents,
-			})
-			if err != nil {
-				return err
-			}
-
-			if flags.asJSON {
-				return out.WriteJSON(os.Stdout, map[string]any{
-					"synced":          true,
-					"messages_stored": res.MessagesStored,
-				})
-			}
-			fmt.Fprintf(os.Stdout, "Messages stored: %d\n", res.MessagesStored)
-			return nil
+			fmt.Fprintf(os.Stderr, "Linked. Archiving history into %s (keep the phone online)…\n", s.ar.Root())
+			s.runUntilIdle(ctx, idle)
+			return report(f, s.summary())
 		},
 	}
-
-	cmd.Flags().BoolVar(&once, "once", false, "sync until idle and exit")
-	cmd.Flags().BoolVar(&follow, "follow", true, "keep syncing until Ctrl+C")
-	cmd.Flags().DurationVar(&idleExit, "idle-exit", 30*time.Second, "exit after being idle (once mode)")
-	cmd.Flags().DurationVar(&maxReconnect, "max-reconnect", 5*time.Minute, "give up reconnecting after this duration (0 = unlimited)")
-	cmd.Flags().DurationVar(&staleThreshold, "stale-threshold", 0, "force reconnect when keepalive failures last this long in follow mode (1s-<2m20s, 0 = disabled)")
-	cmd.Flags().StringVar(&presenceModeFlag, "presence-mode", string(appPkg.SyncPresenceModeNormal), "global sync presence behavior: normal or quiet")
-	cmd.Flags().StringVar(&sendSpacingFlag, "send-spacing", "", "pace delegated sends in follow mode by a fixed duration or random min-max range (e.g. 2s or 500ms-5s; default: disabled)")
-	cmd.Flags().BoolVar(&downloadMedia, "download-media", false, "download media in the background during sync")
-	cmd.Flags().BoolVar(&refreshContacts, "refresh-contacts", false, "refresh contacts from session store into local DB")
-	cmd.Flags().BoolVar(&refreshGroups, "refresh-groups", false, "refresh joined groups and participant snapshots (live)")
-	cmd.Flags().BoolVar(&refreshChannels, "refresh-channels", false, "refresh subscribed channels (live) into local DB")
-	cmd.Flags().StringVar(&webhookURL, "webhook", "", "URL to POST live message JSON")
-	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "HMAC-SHA256 secret for X-Wacli-Signature header")
-	cmd.Flags().BoolVar(&webhookAllowPrivate, "webhook-allow-private", false, "allow webhook URLs that resolve to localhost or private networks")
-	cmd.Flags().StringVar(&webhookEventsFlag, "webhook-events", string(appPkg.SyncWebhookEventMessage), "comma-separated event types to POST: message, receipt, chat_presence")
-	cmd.Flags().Int64Var(&storage.maxMessages, "max-messages", 0, "maximum total messages to keep in the local DB before sync stops (0 = unlimited, or WACLI_SYNC_MAX_MESSAGES)")
-	cmd.Flags().StringVar(&storage.maxDBSize, "max-db-size", "", "maximum wacli.db disk usage before sync stops, e.g. 500MB or 2GB (default: WACLI_SYNC_MAX_DB_SIZE or unlimited)")
+	cmd.Flags().StringVar(&phone, "phone", "", "pair with a code for this phone number instead of a QR code")
+	cmd.Flags().IntVar(&days, "history-days", 0, "days of history to request (0 = everything the phone has)")
+	cmd.Flags().DurationVar(&idle, "idle-exit", 3*time.Minute, "finish after this long without new history")
 	return cmd
+}
+
+func newSyncCmd(f *rootFlags) *cobra.Command {
+	var follow bool
+	var idle time.Duration
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Archive new messages (keep running with --follow)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := openSession(f)
+			if err != nil {
+				return err
+			}
+			defer s.close()
+			ctx, cancel := signalContext()
+			defer cancel()
+			if !s.wa.IsAuthed() {
+				return errUnlinked
+			}
+			if err := s.start(ctx, wa.ConnectOptions{DetachSocket: follow}); err != nil {
+				return err
+			}
+			if !follow {
+				s.runUntilIdle(ctx, idle)
+				return report(f, s.summary())
+			}
+			stop, err := serveIPC(ctx, f, s)
+			if err != nil {
+				return err
+			}
+			defer stop()
+			fmt.Fprintf(os.Stderr, "Archiving into %s; Ctrl+C to stop.\n", s.ar.Root())
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-s.arc.LoggedOut():
+				return errUnlinked
+			}
+		},
+	}
+	cmd.Flags().BoolVar(&follow, "follow", false, "keep running and archive messages as they arrive")
+	cmd.Flags().DurationVar(&idle, "idle-exit", 30*time.Second, "without --follow, finish after this long without new messages")
+	return cmd
+}
+
+func report(f *rootFlags, data map[string]any) error {
+	if f.asJSON {
+		return out.WriteJSON(os.Stdout, data)
+	}
+	fmt.Printf("Archive: %v\nChats: %v\nNew messages: %v\nAttachments still pending: %v\n",
+		data["archive"], data["chats"], data["new_messages"], data["pending_media"])
+	return nil
 }

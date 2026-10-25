@@ -14,14 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openclaw/wacli/internal/fsutil"
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/socket"
 	"go.mau.fi/whatsmeow/util/cbcutil"
 	"go.mau.fi/whatsmeow/util/hkdfutil"
 )
 
-const MaxMediaDownloadSize = 100 * 1024 * 1024
+// WhatsApp's own limit for documents; the normal path streams to disk.
+const MaxMediaDownloadSize = 2 * 1024 * 1024 * 1024
 
 var directMediaBaseURL = "https://mmg.whatsapp.net"
 

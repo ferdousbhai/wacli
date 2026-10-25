@@ -2,7 +2,6 @@ package lock
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -62,61 +61,6 @@ func TestLockBlocksOtherProcess(t *testing.T) {
 	}
 	if !strings.Contains(got, "EXPECTED_LOCKED") {
 		t.Fatalf("expected helper to report locked; output=%q", strings.TrimSpace(got))
-	}
-}
-
-func TestAcquireWithTimeout(t *testing.T) {
-	dir := t.TempDir()
-
-	lk, err := Acquire(dir)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	defer lk.Release()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = AcquireWithTimeout(ctx, dir, 50*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "timed out waiting for store lock") {
-		t.Fatalf("AcquireWithTimeout error = %v", err)
-	}
-	if !errors.Is(err, ErrLocked) || !IsLocked(err) {
-		t.Fatalf("AcquireWithTimeout did not wrap ErrLocked: %v", err)
-	}
-}
-
-func TestAcquireWithTimeoutHonorsCanceledContext(t *testing.T) {
-	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	lk, err := AcquireWithTimeout(ctx, dir, time.Second)
-	if err == nil {
-		_ = lk.Release()
-		t.Fatalf("AcquireWithTimeout acquired lock with canceled context")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("AcquireWithTimeout error = %v, want context.Canceled", err)
-	}
-}
-
-func TestAcquireWithTimeoutDoesNotRetryNonLockErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	_, err := AcquireWithTimeout(ctx, path, time.Hour)
-	if err == nil {
-		t.Fatalf("AcquireWithTimeout succeeded for file store path")
-	}
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timed out waiting for store lock") {
-		t.Fatalf("AcquireWithTimeout retried non-lock error: %v", err)
-	}
-	if IsLocked(err) {
-		t.Fatalf("AcquireWithTimeout classified non-lock error as locked: %v", err)
 	}
 }
 

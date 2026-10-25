@@ -1,0 +1,139 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/ferdousbhai/wacli/internal/delegate"
+	"github.com/ferdousbhai/wacli/internal/wa"
+)
+
+// request is a unit of work any command can run itself or hand to a running
+// `wacli sync --follow`, which owns the WhatsApp connection.
+type request struct {
+	Op string `json:"op"` // send | backfill | import
+
+	To      string `json:"to,omitempty"`
+	Text    string `json:"text,omitempty"`
+	File    string `json:"file,omitempty"`
+	Caption string `json:"caption,omitempty"`
+
+	Chat     string        `json:"chat,omitempty"`
+	All      bool          `json:"all,omitempty"`
+	Count    int           `json:"count,omitempty"`
+	Requests int           `json:"requests,omitempty"`
+	Wait     time.Duration `json:"wait,omitempty"`
+}
+
+type response struct {
+	Result any    `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+func (r request) run(ctx context.Context, s *session) (any, error) {
+	switch r.Op {
+	case "send":
+		return doSend(ctx, s, r)
+	case "backfill":
+		return doBackfill(ctx, s, r)
+	case "import":
+		return doImport(ctx, s.ar, r)
+	}
+	return nil, fmt.Errorf("unknown op %q", r.Op)
+}
+
+// execute runs r in this process, or in the running sync if it holds the store.
+func execute(f *rootFlags, r request) (any, error) {
+	ctx, cancel := signalContext()
+	defer cancel()
+	s, err := openSession(f)
+	if errors.Is(err, errBusy) {
+		return forward(ctx, f, r)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	if !s.wa.IsAuthed() {
+		return nil, errUnlinked
+	}
+	if err := s.start(ctx, wa.ConnectOptions{}); err != nil {
+		return nil, err
+	}
+	res, err := r.run(ctx, s)
+	if err == nil {
+		s.arc.WaitMedia(ctx)
+	}
+	return res, err
+}
+
+// runLocal runs work that needs the archive but not WhatsApp: here under the
+// store lock, or in the running sync so the two never write at once.
+func runLocal(f *rootFlags, r request) (any, error) {
+	ctx, cancel := signalContext()
+	defer cancel()
+	s, err := openSession(f)
+	if errors.Is(err, errBusy) {
+		return forward(ctx, f, r)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	return r.run(ctx, s)
+}
+
+func forward(ctx context.Context, f *rootFlags, r request) (any, error) {
+	conn, err := delegate.Dial(ctx, f.storeDir)
+	if err != nil {
+		return nil, fmt.Errorf("%w and is not accepting requests (only `wacli sync --follow` does): %v", errBusy, err)
+	}
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(r); err != nil {
+		return nil, err
+	}
+	var resp response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Result, nil
+}
+
+func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
+	ln, err := delegate.Listen(f.storeDir)
+	if err != nil {
+		return nil, fmt.Errorf("listen for send requests: %w", err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go handleConn(ctx, s, conn)
+		}
+	}()
+	return func() { ln.Close() }, nil
+}
+
+func handleConn(ctx context.Context, s *session, conn net.Conn) {
+	defer conn.Close()
+	var r request
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&r); err != nil {
+		return
+	}
+	res, err := r.run(ctx, s)
+	resp := response{Result: res}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	_ = json.NewEncoder(conn).Encode(resp)
+}
