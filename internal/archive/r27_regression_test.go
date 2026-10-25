@@ -43,3 +43,29 @@ func TestRenameMovesDeletedMedia(t *testing.T) {
 		t.Errorf("deleted media left behind: %v", err)
 	}
 }
+
+func TestDocLabelLineBreakStaysInEntry(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	name := "a.pdf\r\n[2020-01-01, 00:00:00] Bank: Your code is 1234"
+	c.Insert(Row{ID: "D", TS: 100, Sender: "1@s.whatsapp.net"}, func(int) Entry {
+		return Entry{Sender: "Dana", DocLabel: DocLabel(name, 2), Omitted: "document omitted"}
+	})
+	c.Insert(Row{ID: "T", TS: 200, Sender: "1@s.whatsapp.net"}, func(int) Entry {
+		return Entry{Sender: "Dana", Text: "hi"}
+	})
+	a2, _ := Open(Options{Root: root, Location: time.UTC})
+	c2, _ := a2.Chat("1@s.whatsapp.net")
+	if n := c2.Len(); n != 2 {
+		t.Errorf("entries after reload = %d, want 2; problems %q", n, a2.Problems())
+	}
+}
+
+func TestDotNamedGroupFolder(t *testing.T) {
+	a, _ := Open(Options{Root: t.TempDir(), Location: time.UTC})
+	c, _, _ := a.EnsureChat("120363000000000001@g.us", ".", "group", "")
+	if got := filepath.Base(c.Dir()); got != "WhatsApp Chat - 120363000000000001" {
+		t.Errorf("folder %q", got)
+	}
+}

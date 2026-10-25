@@ -93,7 +93,7 @@ func Render(e Entry, dateFormat string) string {
 var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 
 func renderBody(e Entry) string {
-	e.Text = lineBreaks.Replace(e.Text)
+	e.Text, e.DocLabel = lineBreaks.Replace(e.Text), lineBreaks.Replace(e.DocLabel)
 	switch {
 	case e.Deleted != "":
 		return lrm + e.Deleted
@@ -341,6 +341,7 @@ func OmittedText(mediaType string) string {
 
 // DocLabel is the text iOS shows before an attached document.
 func DocLabel(name string, pages uint32) string {
+	name = CleanName(name) // the sender picks it; one line, like the file's name
 	if pages == 0 {
 		return name
 	}
