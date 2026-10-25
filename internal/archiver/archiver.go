@@ -307,7 +307,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	// Live edits, deletes and redeliveries name a message by ID only; the
 	// phone checked history ones, but live, anyone in the chat could name
 	// someone else's message.
-	if b == nil && c.Has(pm.ID) && !a.mayChange(ctx, c, pm) {
+	if b == nil && !a.mayArchiveLive(ctx, c, pm) {
 		a.logf("ignored a change to %s in %s from someone other than its sender", pm.ID, c.Name())
 		return
 	}
@@ -458,7 +458,7 @@ func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender str
 		e.DocLabel = archive.DocLabel(pm.Media.Filename, pm.Media.PageCount)
 	case pm.Media != nil:
 		e.Text = a.names.mentions(ctx, pm.Media.Caption, pm.MentionedJIDs)
-	case pm.Call != nil:
+	case pm.Call != nil && pm.FromMe: // call records come from your own phone
 		e.System, e.Text = true, callText(pm.Call)
 	case pm.Poll != nil:
 		e.System = true
@@ -654,6 +654,26 @@ func (a *Archiver) fillBlank(ctx context.Context, b *batch, c *archive.Chat, pm 
 		return true
 	})
 	a.wrote(b, c, err)
+}
+
+// mayArchiveLive vets a live message, which names its target by an ID the
+// sender chose. IDs with ":" are wacli's own (group changes, imports,
+// repairs); no WhatsApp message has one. A change to a message not
+// archived yet can't be checked: an edit is dropped (the original comes
+// with history), and a delete is kept only as the sender's own.
+func (a *Archiver) mayArchiveLive(ctx context.Context, c *archive.Chat, pm wa.ParsedMessage) bool {
+	switch {
+	case strings.Contains(pm.ID, ":"):
+		return false
+	case c.Has(pm.ID):
+		return a.mayChange(ctx, c, pm)
+	case pm.Edited:
+		return false
+	case pm.Revoked && pm.TargetSender != "":
+		// Someone else's message: only an admin may delete it.
+		return pm.FromMe || a.isAdmin(ctx, pm.Chat, pm.SenderJID)
+	}
+	return true
 }
 
 // mayChange reports whether pm may change the archived message with its

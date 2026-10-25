@@ -679,11 +679,11 @@ func revoke(id, participant string) *waE2E.Message {
 func TestAdminDeletesKeepTheSender(t *testing.T) {
 	a, ar := newTestArchiver(t)
 	a.handle(live(group, dana, "G1", false, t0, text("spam")))
-	a.handle(live(group, me, "R1", true, t0+10, revoke("G1", dana)))  // you, as admin
-	a.handle(live(group, dana, "R2", false, t0+20, revoke("G2", me))) // Dana, as admin, deletes yours (never seen)
-	got := chatFile(t, ar, group)
-	if !strings.Contains(got, "Dana Putri: ‎This message was deleted.\r\n") || strings.Contains(got, "You deleted") ||
-		!strings.Contains(got, "] Alex: ‎This message was deleted.\r\n") {
+	a.handle(live(group, me, "R1", true, t0+10, revoke("G1", dana))) // you, as admin
+	// Dana deletes yours, never seen: kept out, as her being an admin
+	// can't be checked offline.
+	a.handle(live(group, dana, "R2", false, t0+20, revoke("G2", me)))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:33] Dana Putri: ‎This message was deleted.\r\n" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -801,5 +801,27 @@ func TestOthersCantRewriteMessages(t *testing.T) {
 	a.handle(live(group, dana, "E1", false, t0+20, edit("D1", text("hello there"))))
 	if got := chatFile(t, ar, group); !strings.Contains(got, "hello there") {
 		t.Errorf("the sender's own edit was refused: %q", got)
+	}
+}
+
+func TestLiveForgeriesOfUnarchivedOrWacliMessages(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	mallory := "6284444444444@s.whatsapp.net"
+	g, _ := types.ParseJID(group)
+	d, _ := types.ParseJID(dana)
+	a.handle(&events.GroupInfo{JID: g, Sender: &d, Timestamp: time.Unix(t0, 0), Name: &types.GroupName{Name: "Maya"}})
+	before := chatFile(t, ar, group)
+	a.handle(live(group, mallory, "X1", false, t0+5, edit(fmt.Sprintf("wacli:subject:%d", t0), text("forged"))))
+	a.handle(live(group, mallory, "X2", false, t0+6, edit("OLD1", text("Dana never said this"))))
+	a.handle(live(group, mallory, "X3", false, t0+7, revoke("OLD2", dana)))
+	a.handle(live(group, mallory, "X4", false, t0+8, &waE2E.Message{CallLogMesssage: &waE2E.CallLogMessage{IsVideo: proto.Bool(true), DurationSecs: proto.Int64(7300)}}))
+	got := chatFile(t, ar, group)
+	if !strings.HasPrefix(got, before) {
+		t.Errorf("an archived line changed: %q", got)
+	}
+	for _, forged := range []string{"forged", "never said", "deleted", "call"} {
+		if strings.Contains(got, forged) {
+			t.Errorf("%q archived: %q", forged, got)
+		}
 	}
 }
