@@ -62,7 +62,7 @@ func (a *Archiver) RefreshNames(ctx context.Context, all bool) {
 		_, suffix := chatKind(jid)
 		name := info.Name
 		if IsFallbackName(name, info.JID) {
-			if n := archive.CleanName(a.names.chat(ctx, jid, "")); !IsFallbackName(n, info.JID) {
+			if n := archive.CleanName(a.names.chat(ctx, jid, "")); !IsFallbackName(n, info.JID) || numberFor(n, name, info.JID) {
 				name = n
 			}
 		}
@@ -130,6 +130,9 @@ func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved 
 				name = a.names.contact(ctx, jid)
 			}
 			resolved[row.Sender] = name
+		}
+		if numberFor(name, sender, row.Sender) {
+			return name, true // a number beats a hidden ID's digits, though still no name
 		}
 		if name == "" || IsFallbackName(strings.TrimPrefix(name, pushPrefix), row.Sender) {
 			left++

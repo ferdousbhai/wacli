@@ -31,7 +31,9 @@ func (c *Client) SendMediaRetryReceipt(ctx context.Context, info *types.MessageI
 	if info == nil {
 		return fmt.Errorf("message info is required")
 	}
-	retryInfo := rewriteMediaRetryInfoForLID(ctx, cli, *info, resolvePNToLID)
+	retryInfo := rewriteMediaRetryInfoForLID(ctx, cli, *info, func(ctx context.Context, cli *whatsmeow.Client, jid types.JID) types.JID {
+		return resolvePNToLID(ctx, cli, jid, true)
+	})
 	return cli.SendMediaRetryReceipt(ctx, &retryInfo, mediaKey)
 }
 

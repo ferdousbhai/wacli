@@ -693,20 +693,24 @@ func (c *Chat) reconcile() error {
 func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Location) []int {
 	const block, maxShift = 15 * 60, 26 * 3600
 	tss := make([]int64, len(entries))
+	alts := make([]int64, len(entries)) // the other reading of a time a DST fall-back repeats
 	var lastTS int64
 	for i, raw := range entries {
 		ts := lastTS
 		if e, err := Parse(raw, dateFormat, loc); err == nil {
 			ts = e.Time.Unix()
+			alts[i] = earlierReading(e, dateFormat).Unix()
+		} else {
+			alts[i] = ts
 		}
 		tss[i], lastTS = ts, ts
 	}
 	reach := 64 + max(0, len(rows)-len(entries))
 	isStep := func(d int64) bool { return d%block == 0 && d >= -maxShift && d <= maxShift }
 	// find returns the first row from `from` (within limit) at shift d.
-	find := func(from, limit int, ts, d int64) int {
+	find := func(from, limit, i int, d int64) int {
 		for k := from; k < min(len(rows), from+limit); k++ {
-			if rows[k].TS-ts == d {
+			if rows[k].TS-tss[i] == d || rows[k].TS-alts[i] == d {
 				return k
 			}
 		}
@@ -721,19 +725,19 @@ func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Locati
 	// line), and the two entries after i must pair at d after row k (just
 	// the next one at the end of the chat).
 	confirmed := func(k, i int, d int64) bool {
-		if find(next, reach, tss[i+1], 0) >= 0 || (known && find(next, reach, tss[i+1], offset) >= 0) {
+		if find(next, reach, i+1, 0) >= 0 || (known && find(next, reach, i+1, offset) >= 0) {
 			return false
 		}
-		k2 := find(k+1, reach, tss[i+1], d)
+		k2 := find(k+1, reach, i+1, d)
 		if k2 < 0 {
 			return false
 		}
-		return i+2 >= len(tss) || find(k2+1, reach, tss[i+2], d) >= 0
+		return i+2 >= len(tss) || find(k2+1, reach, i+2, d) >= 0
 	}
 	for i, ts := range tss {
-		match := find(next, reach, ts, 0)
+		match := find(next, reach, i, 0)
 		if known && offset != 0 {
-			if m := find(next, reach, ts, offset); m >= 0 && (match < 0 || m < match) {
+			if m := find(next, reach, i, offset); m >= 0 && (match < 0 || m < match) {
 				match = m
 			}
 		}
@@ -750,6 +754,9 @@ func matchRows(entries []string, rows []Row, dateFormat string, loc *time.Locati
 			continue
 		}
 		offset, known = rows[match].TS-ts, true
+		if rows[match].TS == alts[i] {
+			offset = 0 // paired at the earlier reading of a repeated hour
+		}
 		next = match + 1
 	}
 	return out

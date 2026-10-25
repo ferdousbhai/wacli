@@ -125,7 +125,7 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 			}
 		}
 	} else {
-		jid, err := resolveChat(s.ar, r.Chat)
+		jid, err := resolveChat(s.ar, r.Chat, s.lidOf(ctx))
 		if err != nil {
 			return nil, err
 		}

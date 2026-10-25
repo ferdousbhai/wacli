@@ -12,6 +12,8 @@ import (
 	"github.com/ferdousbhai/wacli/internal/archiver"
 	"github.com/ferdousbhai/wacli/internal/lock"
 	"github.com/ferdousbhai/wacli/internal/wa"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 // session is a connected WhatsApp client writing into the archive. Only one
@@ -154,4 +156,9 @@ func haltErr(h archiver.Halt) error {
 		return errors.New(h.Reason)
 	}
 	return fmt.Errorf("%w: %s", errHalted, h.Reason)
+}
+
+// lidOf maps a number to its hidden ID from stored mappings (no network).
+func (s *session) lidOf(ctx context.Context) func(types.JID) types.JID {
+	return func(j types.JID) types.JID { return s.wa.LookupPNToLID(ctx, j) }
 }

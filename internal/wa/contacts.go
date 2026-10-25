@@ -9,8 +9,9 @@ import (
 )
 
 // resolvePNToLID uses the supplied session, falling back to the original JID
-// when neither its stored mappings nor a user-info lookup resolves it.
-func resolvePNToLID(ctx context.Context, cli *whatsmeow.Client, jid types.JID) types.JID {
+// when neither its stored mappings nor (with network) a user-info lookup
+// resolves it.
+func resolvePNToLID(ctx context.Context, cli *whatsmeow.Client, jid types.JID, network bool) types.JID {
 	if cli == nil || cli.Store == nil {
 		return jid
 	}
@@ -26,6 +27,9 @@ func resolvePNToLID(ctx context.Context, cli *whatsmeow.Client, jid types.JID) t
 	lid, err := cli.Store.LIDs.GetLIDForPN(ctx, pn)
 	if err == nil && !lid.IsEmpty() {
 		return lid
+	}
+	if !network {
+		return jid
 	}
 	info, err := cli.GetUserInfo(ctx, []types.JID{pn})
 	if err == nil {
@@ -63,6 +67,17 @@ func (c *Client) ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID {
 	return pn
 }
 
+// LookupPNToLID is ResolvePNToLID from stored mappings only: no network.
+func (c *Client) LookupPNToLID(ctx context.Context, jid types.JID) types.JID {
+	if jid.Server != types.DefaultUserServer {
+		return jid
+	}
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	return resolvePNToLID(ctx, cli, jid, false)
+}
+
 func (c *Client) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	if jid.Server != types.DefaultUserServer {
 		return jid
@@ -70,7 +85,7 @@ func (c *Client) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
-	return resolvePNToLID(ctx, cli, jid)
+	return resolvePNToLID(ctx, cli, jid, true)
 }
 
 // StoreLIDMapping records that a hidden ID (LID) and a phone number are the
@@ -78,6 +93,9 @@ func (c *Client) ResolvePNToLID(ctx context.Context, jid types.JID) types.JID {
 func (c *Client) StoreLIDMapping(ctx context.Context, lid, pn string) {
 	l, err1 := types.ParseJID(lid)
 	p, err2 := types.ParseJID(pn)
+	if p.Server == types.LegacyUserServer {
+		p.Server = types.DefaultUserServer
+	}
 	if err1 != nil || err2 != nil || l.Server != types.HiddenUserServer || p.Server != types.DefaultUserServer {
 		return
 	}

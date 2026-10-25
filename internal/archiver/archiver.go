@@ -230,7 +230,13 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		}
 		// The phone pairs the chat's hidden ID with its number here; stored
 		// first, so its messages land in one folder.
-		a.wa.StoreLIDMapping(ctx, conv.GetLidJID(), conv.GetPnJID())
+		lid, pn := conv.GetLidJID(), conv.GetPnJID()
+		if lid == "" && strings.HasSuffix(chatID, "@lid") {
+			lid = chatID
+		} else if pn == "" && !strings.HasSuffix(chatID, "@g.us") {
+			pn = chatID
+		}
+		a.wa.StoreLIDMapping(ctx, lid, pn)
 		hint := conv.GetName()
 		if hint == "" {
 			hint = conv.GetDisplayName()
@@ -707,7 +713,7 @@ func (a *Archiver) chatKey(ctx context.Context, jid types.JID) types.JID {
 	if _, ok := a.ar.Info(key.String()); ok {
 		return key
 	}
-	for _, alt := range []types.JID{jid, a.wa.ResolvePNToLID(ctx, key).ToNonAD()} {
+	for _, alt := range []types.JID{jid, a.wa.LookupPNToLID(ctx, key).ToNonAD()} {
 		if _, ok := a.ar.Info(alt.String()); ok && !alt.IsEmpty() {
 			return alt
 		}

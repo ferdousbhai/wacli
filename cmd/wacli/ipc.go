@@ -43,7 +43,7 @@ func (r request) run(ctx context.Context, s *session) (any, error) {
 	case "backfill":
 		return doBackfill(ctx, s, r)
 	case "import":
-		return doImport(ctx, s.ar, r)
+		return doImport(ctx, s.ar, r, s.lidOf(ctx))
 	}
 	return nil, fmt.Errorf("unknown op %q", r.Op)
 }

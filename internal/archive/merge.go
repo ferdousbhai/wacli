@@ -112,18 +112,24 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 		in.Sender = c.info.Name
 	}
 	window := int64(matchWindow / time.Second)
-	t := in.Time.Unix()
 	bestID, bestD := "", window+1
+	for _, t := range []int64{in.Time.Unix(), earlierReading(in, c.a.opts.DateFormat).Unix()} {
+		c.findAt(in, t, window, used, &bestID, &bestD)
+	}
+	return bestID, bestID != ""
+}
+
+func (c *Chat) findAt(in Entry, t, window int64, used map[string]bool, bestID *string, bestD *int64) {
 	consider := func(row Row, raw string) {
 		d := row.TS - t
 		if d < 0 {
 			d = -d
 		}
-		if d > window || d >= bestD || used[row.ID] {
+		if d > window || d >= *bestD || used[row.ID] {
 			return
 		}
 		if e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location); err == nil && e.Sender == in.Sender && sameContent(e, in) {
-			bestID, bestD = row.ID, d
+			*bestID, *bestD = row.ID, d
 		}
 	}
 	for i := sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS >= t-window }); i < len(c.rows) && c.rows[i].TS <= t+window; i++ {
@@ -134,7 +140,6 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	for _, p := range c.pending {
 		consider(p.row, p.text)
 	}
-	return bestID, bestID != ""
 }
 
 // Find reports whether the chat already has an entry for the same message as

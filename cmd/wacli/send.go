@@ -82,7 +82,7 @@ func doSend(ctx context.Context, s *session, r request) (any, error) {
 	if err := s.waitLoggedIn(ctx); err != nil { // also in a sync that is reconnecting
 		return nil, err
 	}
-	to, err := resolveChat(s.ar, r.To)
+	to, err := resolveChat(s.ar, r.To, s.lidOf(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,9 @@ func optional(s string) *string {
 }
 
 // resolveChat accepts a phone number, a JID, or the name of an archived chat.
-func resolveChat(ar *archive.Archive, to string) (types.JID, error) {
+// resolveChat finds the archived chat to names. lidOf, when given, maps a
+// number to the hidden ID a chat may still be archived under.
+func resolveChat(ar *archive.Archive, to string, lidOf func(types.JID) types.JID) (types.JID, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
 		return types.JID{}, fmt.Errorf("recipient is required")
@@ -186,6 +188,13 @@ func resolveChat(ar *archive.Archive, to string) (types.JID, error) {
 		number = types.NewJID(digits, types.DefaultUserServer)
 		if _, ok := ar.Info(number.String()); ok {
 			return number, nil
+		}
+		if lidOf != nil {
+			if lid := lidOf(number); lid != number {
+				if _, ok := ar.Info(lid.String()); ok {
+					return lid, nil
+				}
+			}
 		}
 		// Not an archived number: it may be the name of a group ("2024").
 	}

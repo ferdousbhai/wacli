@@ -31,10 +31,10 @@ func TestNumberLikeGroupNameIsFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	ar.EnsureChat("120363000000000001@g.us", "2024", "group", "")
-	if jid, err := resolveChat(ar, "2024"); err != nil || jid.String() != "120363000000000001@g.us" {
+	if jid, err := resolveChat(ar, "2024", nil); err != nil || jid.String() != "120363000000000001@g.us" {
 		t.Errorf("got %v %v", jid, err)
 	}
-	if jid, _ := resolveChat(ar, "+1 (415) 555-1212"); jid.String() != "14155551212@s.whatsapp.net" {
+	if jid, _ := resolveChat(ar, "+1 (415) 555-1212", nil); jid.String() != "14155551212@s.whatsapp.net" {
 		t.Errorf("number: %v", jid)
 	}
 }

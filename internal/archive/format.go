@@ -418,3 +418,18 @@ func truncateName(name string, max int) string {
 	}
 	return string(stem[:max]) + ext
 }
+
+// earlierReading returns the earlier instant a time in the hour a DST
+// fall-back repeats can mean (Parse picks the later one), or e.Time.
+func earlierReading(e Entry, dateFormat string) time.Time {
+	start, _ := e.Time.ZoneBounds()
+	if start.IsZero() || e.Time.Sub(start) >= 2*time.Hour {
+		return e.Time
+	}
+	_, now := e.Time.Zone()
+	_, before := start.Add(-time.Second).Zone()
+	if alt := e.Time.Add(-time.Duration(before-now) * time.Second); before > now && alt.Format(dateFormat) == e.stamp {
+		return alt
+	}
+	return e.Time
+}

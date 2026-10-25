@@ -840,3 +840,15 @@ func TestMappingLearnedLaterKeepsOneFolder(t *testing.T) {
 		t.Errorf("%d chats: %+v", n, ar.Chats())
 	}
 }
+
+func TestHiddenIDChatGetsItsNumberOnceKnown(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	lid := "99887766554433@lid"
+	a.handle(live(lid, lid, "L1", false, t0, text("first")))
+	a.wa.StoreLIDMapping(context.Background(), lid, "6285555555555@s.whatsapp.net")
+	a.RefreshNames(context.Background(), true)
+	info, _ := ar.Info(lid)
+	if info.Name != "+6285555555555" || !strings.Contains(chatFile(t, ar, lid), "+6285555555555: first") {
+		t.Errorf("name %q, file %q", info.Name, chatFile(t, ar, lid))
+	}
+}

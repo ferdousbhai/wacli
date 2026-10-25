@@ -136,6 +136,12 @@ func IsFallbackName(name, jid string) bool {
 	return true
 }
 
+// numberFor reports whether name is a phone number for the hidden ID (LID)
+// jid that cur shows as its digits: a number, though not a name, is better.
+func numberFor(name, cur, jid string) bool {
+	return strings.HasSuffix(jid, "@lid") && strings.HasPrefix(name, "+") && strings.TrimSpace(cur) == userOf(jid)
+}
+
 func (n *names) group(ctx context.Context, jid types.JID) string {
 	n.mu.Lock()
 	name := n.groups[jid.String()]

@@ -14,6 +14,8 @@ import (
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/out"
 	"github.com/spf13/cobra"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func newImportCmd(f *rootFlags) *cobra.Command {
@@ -50,7 +52,7 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 }
 
 // doImport needs no connection, only the archive.
-func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) {
+func doImport(ctx context.Context, ar *archive.Archive, r request, lidOf func(types.JID) types.JID) (any, error) {
 	dir, unpacked := r.File, false
 	if strings.EqualFold(filepath.Ext(r.File), ".zip") {
 		// Unpack inside the archive (same disk, cleared after a crash),
@@ -69,7 +71,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) 
 	if target == "" {
 		target = exportChatName(r.File)
 	}
-	jid, err := resolveChat(ar, target)
+	jid, err := resolveChat(ar, target, lidOf)
 	if err != nil {
 		return nil, err
 	}
