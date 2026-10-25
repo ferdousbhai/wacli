@@ -323,6 +323,9 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 
 	msg := cli.BuildHistorySyncRequest(&lastKnown, count)
 	resp, err := cli.SendMessage(ctx, ownID, msg, whatsmeow.SendRequestExtra{Peer: true})
+	if errors.Is(err, whatsmeow.ErrNotConnected) {
+		return "", ErrNotConnected // dropped just now
+	}
 	if err != nil {
 		return "", err
 	}

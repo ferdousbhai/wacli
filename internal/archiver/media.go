@@ -425,7 +425,6 @@ func (q *mediaQueue) placeOwn(chat, id string, data []byte) (err error) {
 	return nil
 }
 
-// queued reports whether a download for this message is queued or running.
 // name is the file name a queued download will get, or "".
 func (q *mediaQueue) name(chat, id string) string {
 	q.mu.Lock()
@@ -436,6 +435,7 @@ func (q *mediaQueue) name(chat, id string) string {
 	return ""
 }
 
+// queued reports whether a download for this message is queued or running.
 func (q *mediaQueue) queued(chat, id string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()

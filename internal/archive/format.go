@@ -154,24 +154,7 @@ func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 	if i := strings.LastIndex(body, attachOpen); i >= 0 && strings.HasSuffix(body, ">") {
 		e.Attachment = body[i+len(attachOpen) : len(body)-1]
 		body = strings.TrimSuffix(body[:i], " ")
-		if !isGeneratedMediaName(e.Attachment) {
-			// Documents: "<name> • ‎<n> pages" (or just "<name>") before the file.
-			// The file's name may be shortened; the label starts with it.
-			label := filepath.Base(e.Attachment)
-			if _, name, ok := strings.Cut(label, "-"); ok {
-				label = name
-			}
-			j := strings.LastIndex(body, label)
-			if j < 0 { // shortened: match by the stem
-				label = strings.TrimSuffix(label, filepath.Ext(label))
-				j = strings.LastIndex(body, label)
-			}
-			if j >= 0 && label != "" {
-				e.DocLabel = body[j:]
-				body = strings.TrimSuffix(body[:j], " ")
-			}
-		}
-		e.Text = body
+		e.Text, e.DocLabel = SplitDocLabel(body, e.Attachment)
 		return e, nil
 	}
 	for _, kind := range omittedKinds {
@@ -198,6 +181,31 @@ var omittedKinds = []string{
 var generatedNameRE = regexp.MustCompile(`^\d{8}-(PHOTO|VIDEO|AUDIO|STICKER|GIF)-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.`)
 
 func isGeneratedMediaName(name string) bool { return generatedNameRE.MatchString(name) }
+
+// SplitDocLabel splits a document's text into caption and "<name> • ‎<n>
+// pages" label (or just "<name>"), by the name of its file in the folder,
+// which may be shortened: the label starts with it.
+func SplitDocLabel(body, file string) (text, label string) {
+	if isGeneratedMediaName(file) {
+		return body, ""
+	}
+	name := filepath.Base(file)
+	if _, n, ok := strings.Cut(name, "-"); ok {
+		name = n
+	}
+	if name == "document" {
+		return body, "" // sent without a name: no label
+	}
+	j := strings.LastIndex(body, name)
+	if j < 0 { // shortened: match by the stem
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+		j = strings.LastIndex(body, name)
+	}
+	if j < 0 || name == "" {
+		return body, ""
+	}
+	return strings.TrimSuffix(body[:j], " "), body[j:]
+}
 
 // renameSystemSender returns raw with its sender replaced, if raw is a system
 // line attributed to oldSender. It matches the known name rather than parsing

@@ -66,3 +66,16 @@ func TestParseDocLabelWithShortName(t *testing.T) {
 }
 
 func TestEditAttachedShortNamedDocKeepsLabel(t *testing.T) { editDoc(t, "a.pdf", true) }
+
+func TestSplitDocLabel(t *testing.T) {
+	for _, tc := range []struct{ body, file, text, label string }{
+		{"See attached pages.pdf • ‎3 pages", "00000004-pages.pdf", "See attached", "pages.pdf • ‎3 pages"},
+		{"Invoice 1.pdf • ‎1 page", "00000004-1.pdf", "Invoice", "1.pdf • ‎1 page"},
+		{"Please sign this document", "00000004-document", "Please sign this document", ""},
+		{"Restructuring Invoice - PT. Acme Holding Company.pdf", "00000000-Restructuring Invoice - PT. Acme Holding.pdf", "", "Restructuring Invoice - PT. Acme Holding Company.pdf"},
+	} {
+		if text, label := SplitDocLabel(tc.body, tc.file); text != tc.text || label != tc.label {
+			t.Errorf("%q: text %q label %q", tc.body, text, label)
+		}
+	}
+}

@@ -69,7 +69,7 @@ Matched against a real iOS export (`internal/archive/testdata`).
 |---|---|
 | New message, newest in chat (the normal case) | One rendered entry is appended to `_chat.txt` with a single `write` (fast path), one row appended to the index. |
 | New message older than the last entry (offline backlog, history sync, backfill) | Entry is inserted in timestamp order; `_chat.txt` and index are rewritten to a temp file and renamed over the original, so readers never see a partial file. |
-| Same message again (history overlap, redelivery) | Ignored: its ID is already in the index. |
+| Same message again (history overlap, redelivery) | Kept once: its ID is already in the index. Only an entry archived empty gets the text, and media still "omitted" but no longer queued is queued again. |
 | Media message | The entry is written as `‎image omitted` (or video, audio, …) and the file is queued in `pending-media.json`. A download worker fetches it (from WhatsApp's servers, else by asking the phone to re-upload) and rewrites the entry to `‎<attached: …>`. A failed download is tried twice more (after 15 minutes, then 2 hours), then given up; media the phone no longer has, or that is given up on, stays "omitted" (`wacli import` of a phone export can fill it in). |
 | Edit | Entry located through the index, text replaced, `‎<This message was edited>` appended, file rewritten atomically. |
 | Delete for everyone | Entry becomes `‎This message was deleted.`; its media file moves to `.wacli/deleted/`, keeping the chat folder identical to an export. |

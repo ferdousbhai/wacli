@@ -141,7 +141,7 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		if errors.Is(err, wa.ErrNotConnected) && s.waitLoggedIn(ctx) == nil {
 			// Dropped mid-chat and back: carry on from its saved cursor.
 			more, merr := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
-			more.Added, more.Requests = more.Added+res.Added, more.Requests+res.Requests
+			more.Added, more.Requests = more.Added+res.Added, more.Requests+res.Requests-1 // that one wasn't sent
 			res, err = more, merr
 		}
 		results = append(results, res)
