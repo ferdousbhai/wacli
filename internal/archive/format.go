@@ -120,8 +120,9 @@ func renderBody(e Entry) string {
 }
 
 // The sender may contain a newline: older files kept contact names verbatim.
-// A sender's name may hold a colon, but not ": " (which ends it).
-var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ([^:]*(?::[^ :][^:]*)*):(?: |$)`)
+// The sender ends at the first ": " (or a final ":"); its name may hold
+// colons ("Dr.A:Smith", "Bob:") and line breaks otherwise.
+var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ((?s:.*?)):(?: |$)`)
 
 // Parse reads one entry. Times are interpreted in loc.
 func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
@@ -199,16 +200,29 @@ func SplitDocLabel(body, file string) (text, label string) {
 	if name == "document" {
 		return body, "" // sent without a name: no label
 	}
-	j := strings.LastIndex(body, name)
+	// The label starts the text or follows a space, never inside a word
+	// or its page count.
+	at := func(name string) int {
+		if name == "" {
+			return -1
+		}
+		for j := strings.LastIndex(body, name); j >= 0; j = strings.LastIndex(body[:j], name) {
+			if j == 0 || body[j-1] == ' ' {
+				return j
+			}
+		}
+		return -1
+	}
+	j := at(name)
 	if j < 0 { // shortened: match by the stem
 		name = strings.TrimSuffix(name, filepath.Ext(name))
-		j = strings.LastIndex(body, name)
+		j = at(name)
 	}
 	if j < 0 { // renamed to a free name: "report-2"
 		name = collisionRE.ReplaceAllString(name, "")
-		j = strings.LastIndex(body, name)
+		j = at(name)
 	}
-	if j < 0 || name == "" {
+	if j < 0 {
 		return body, ""
 	}
 	return strings.TrimSuffix(body[:j], " "), body[j:]
