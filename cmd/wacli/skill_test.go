@@ -100,3 +100,16 @@ func TestOlderWacliDoesNotDowngradeTheSkill(t *testing.T) {
 		t.Fatalf("state %s", p.state())
 	}
 }
+
+func TestSkillInstallClearsCrashLeftovers(t *testing.T) {
+	p, _ := testSkillPaths(t)
+	p.install(false)
+	os.WriteFile(filepath.Join(p.dir, ".SKILL.md.123"), []byte("partial"), 0o644)
+	p.install(false)
+	if m, _ := filepath.Glob(filepath.Join(p.dir, ".SKILL.md.*")); len(m) != 0 {
+		t.Errorf("leftovers %v", m)
+	}
+	if _, err := p.remove(); err != nil {
+		t.Errorf("remove: %v", err)
+	}
+}

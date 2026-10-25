@@ -92,7 +92,9 @@ func doSend(ctx context.Context, s *session, r request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.arc.RecordSent(ctx, to, id, msg)
+	if key := s.arc.RecordSent(ctx, to, id, msg); key != "" && s.oneShot {
+		s.arc.WaitMediaKeys(ctx, key)
+	}
 	return map[string]any{"id": id, "chat": to.String()}, nil
 }
 
@@ -166,8 +168,13 @@ func resolveChat(ar *archive.Archive, to string) (types.JID, error) {
 		}
 		return -1
 	}, to)
+	var number types.JID
 	if digits != "" && strings.Trim(to, "+0123456789 -()") == "" {
-		return types.NewJID(digits, types.DefaultUserServer), nil
+		number = types.NewJID(digits, types.DefaultUserServer)
+		if _, ok := ar.Info(number.String()); ok {
+			return number, nil
+		}
+		// Not an archived number: it may be the name of a group ("2024").
 	}
 	var matches []archive.ChatInfo
 	for _, c := range ar.Chats() {
@@ -177,6 +184,9 @@ func resolveChat(ar *archive.Archive, to string) (types.JID, error) {
 	}
 	switch len(matches) {
 	case 0:
+		if !number.IsEmpty() {
+			return number, nil // a number not archived yet
+		}
 		return types.JID{}, fmt.Errorf("no chat named %q; use a phone number or JID (see `wacli chats`)", to)
 	case 1:
 		return types.ParseJID(matches[0].JID)

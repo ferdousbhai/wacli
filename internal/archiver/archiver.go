@@ -137,25 +137,19 @@ func (a *Archiver) touch() { a.lastActivity.Store(time.Now().UnixNano()) }
 // PendingMedia is the number of attachments still to download.
 func (a *Archiver) PendingMedia() int { return a.media.len() }
 
-// MediaMark notes what is queued now; WaitMediaSince waits for downloads
-// queued after it, so a one-shot command waits for its own files only.
-func (a *Archiver) MediaMark() map[string]bool { return a.media.keys() }
-
-// WaitMediaSince blocks until downloads queued after mark are done (or have
-// failed and are backing off), or ctx ends.
-func (a *Archiver) WaitMediaSince(ctx context.Context, mark map[string]bool) {
-	added := map[string]bool{}
-	for k := range a.media.keys() {
-		if !mark[k] {
-			added[k] = true
-		}
+// WaitMediaKeys blocks until the given downloads are done (or have failed
+// and are backing off), or ctx ends.
+func (a *Archiver) WaitMediaKeys(ctx context.Context, keys ...string) {
+	set := map[string]bool{}
+	for _, k := range keys {
+		set[k] = true
 	}
-	a.media.wait(ctx, added)
+	a.media.wait(ctx, set)
 }
 
 // WaitMedia blocks until everything downloadable now is downloaded, or ctx
 // ends (auth and sync wait for the whole queue).
-func (a *Archiver) WaitMedia(ctx context.Context) { a.WaitMediaSince(ctx, nil) }
+func (a *Archiver) WaitMedia(ctx context.Context) { a.media.wait(ctx, a.media.keys()) }
 
 func (a *Archiver) handle(evt any) {
 	a.handling.RLock()
@@ -551,8 +545,9 @@ func skipChat(jid types.JID) bool {
 }
 
 // RecordSent archives a message this device just sent; WhatsApp does not
-// echo it back as an event.
-func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.MessageID, msg *waE2E.Message) {
+// echo it back as an event. It returns the key of the download it queued
+// for an attachment (the file, fetched back), or "".
+func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.MessageID, msg *waE2E.Message) string {
 	own, _ := types.ParseJID(a.wa.LinkedJID())
 	evt := &events.Message{
 		Info: types.MessageInfo{
@@ -563,4 +558,9 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		Message: msg,
 	}
 	a.archiveMessage(ctx, nil, wa.ParseLiveMessage(evt), "")
+	chat := a.canonical(ctx, to).String()
+	if a.media.queued(chat, string(id)) {
+		return chat + "|" + string(id)
+	}
+	return ""
 }

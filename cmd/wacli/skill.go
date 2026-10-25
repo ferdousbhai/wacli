@@ -97,6 +97,7 @@ func (p skillPaths) writeFiles() error {
 	if err := os.MkdirAll(p.dir, 0o755); err != nil {
 		return err
 	}
+	p.removeTempFiles()
 	write := func(name string, data []byte) error {
 		return fsutil.WriteAtomic(filepath.Join(p.dir, name), "", 0o644, func(w *bufio.Writer) error {
 			_, err := w.Write(data)
@@ -107,6 +108,17 @@ func (p skillPaths) writeFiles() error {
 		return err
 	}
 	return write(skillMarker, []byte(fmt.Sprintf("revision %d\n", skills.Revision)))
+}
+
+// removeTempFiles removes what a crash mid-write left in the skill folder
+// (WriteAtomic's ".<name>.*" temp files there).
+func (p skillPaths) removeTempFiles() {
+	for _, pat := range []string{".SKILL.md.*", "." + skillMarker + ".*"} {
+		matches, _ := filepath.Glob(filepath.Join(p.dir, pat))
+		for _, m := range matches {
+			os.Remove(m)
+		}
+	}
 }
 
 // linkClaude links the skill into Claude Code's skills when Claude Code is
@@ -151,6 +163,7 @@ func (p skillPaths) remove() ([]string, error) {
 		}
 		done = append(done, "removed "+p.claude)
 	}
+	p.removeTempFiles()
 	for _, f := range []string{"SKILL.md", skillMarker} {
 		if err := os.Remove(filepath.Join(p.dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err

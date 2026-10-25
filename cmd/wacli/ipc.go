@@ -66,12 +66,8 @@ func execute(f *rootFlags, r request) (any, error) {
 	if err := s.start(ctx, wa.ConnectOptions{}); err != nil {
 		return nil, err
 	}
-	mark := s.arc.MediaMark()
-	res, err := r.run(ctx, s)
-	if err == nil {
-		s.arc.WaitMediaSince(ctx, mark) // its own files, not the backlog
-	}
-	return res, err
+	s.oneShot = true
+	return r.run(ctx, s)
 }
 
 // runLocal runs work that needs the archive but not WhatsApp: here under the

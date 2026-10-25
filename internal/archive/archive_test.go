@@ -723,3 +723,36 @@ func TestDeletedMediaLeftByACrashIsMovedOnLoad(t *testing.T) {
 		t.Errorf("list not cleared: %v", info.DeletedMedia)
 	}
 }
+
+func TestRealignNeverHandsOutAnotherMessagesID(t *testing.T) {
+	// Crash after _chat.txt got older message b, before the index did.
+	entries := []string{
+		"[1970-01-01, 00:16:40] Dana: a",
+		"[1970-01-01, 00:18:20] Dana: b",
+		"[1970-01-01, 00:33:20] Dana: c",
+	}
+	rows := []Row{{ID: "a", TS: 1000}, {ID: "c", TS: 2000}}
+	got := realign(entries, rows, DefaultDateFormat, time.UTC)
+	if got[0].ID != "a" || !strings.HasPrefix(got[1].ID, "repair:") || got[2].ID != "c" {
+		t.Errorf("rows %+v", got)
+	}
+}
+
+func TestDeletionSurvivesAFailedMetaSave(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, func(int) Entry { return Entry{Sender: "Dana", Attachment: "x.jpg"} })
+	os.Chmod(a.TmpDir(), 0o500) // every save fails
+	if _, err := c.MarkDeleted("A", DeletedByThem); err == nil {
+		t.Fatal("expected a save error")
+	}
+	a.Trim(0) // must not drop the unwritten deletion
+	os.Chmod(a.TmpDir(), 0o700)
+	if e, _ := c.Get("A"); e.Deleted == "" {
+		t.Fatal("deletion lost")
+	}
+	c.Flush()
+	if !strings.Contains(chatText(t, c), "This message was deleted.") {
+		t.Error("deletion never written")
+	}
+}

@@ -277,13 +277,17 @@ func (a *Archive) EnsureChat(jid, name, kind, suffix string) (*Chat, bool, error
 			a.mu.Unlock()
 			return nil, false, ErrReadOnly
 		}
+		// Record first, then create the folder (as Rename does): a crash in
+		// between leaves a record whose folder is made on first write, not
+		// an unclaimed folder that pushes the chat to another name.
 		folder := a.freeFolderLocked(name, suffix, jid, "")
-		if err := os.MkdirAll(a.path(folder), 0o700); err != nil {
+		a.meta[jid] = &ChatInfo{JID: jid, Folder: folder, Name: name, Kind: kind}
+		if err := a.saveMetaLocked(); err != nil {
+			delete(a.meta, jid)
 			a.mu.Unlock()
 			return nil, false, err
 		}
-		a.meta[jid] = &ChatInfo{JID: jid, Folder: folder, Name: name, Kind: kind}
-		if err := a.saveMetaLocked(); err != nil {
+		if err := os.MkdirAll(a.path(folder), 0o700); err != nil {
 			a.mu.Unlock()
 			return nil, false, err
 		}
@@ -519,16 +523,19 @@ func (c *Chat) reconcile() error {
 }
 
 // realign pairs each entry with its index row. Both are in time order, so a
-// row matches the next entry with the same timestamp. Only the seconds within
-// a 15-minute block are compared: entries are rendered in whatever zone the
-// computer had when they were written, and zone offsets are multiples of 15
-// minutes. Entries without a row get one that WhatsApp won't recognize; they
-// can no longer be edited or deleted, but the chat keeps working.
+// row matches the next entry with the same timestamp. Entries are rendered in
+// whatever zone the computer had when they were written, so a row may also
+// match at an offset of whole 15-minute steps (zone offsets are multiples of
+// 15 minutes), but only the offset the previous pair matched at: anything
+// else would hand one message another's ID. Entries without a row get one
+// WhatsApp won't recognize; they can no longer be edited or deleted, but the
+// chat keeps working.
 func realign(entries []string, rows []Row, dateFormat string, loc *time.Location) []Row {
 	const block = 15 * 60
 	out := make([]Row, len(entries))
 	next := 0
 	var lastTS int64
+	offset, known := int64(0), false
 	for i, raw := range entries {
 		ts := lastTS
 		if e, err := Parse(raw, dateFormat, loc); err == nil {
@@ -536,10 +543,16 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 		}
 		lastTS = ts
 		match := -1
-		for k := next; k < len(rows) && k < next+64; k++ {
-			if mod(rows[k].TS, block) == mod(ts, block) {
+		end := min(len(rows), next+64)
+		for k := next; k < end && match < 0; k++ { // the same instant
+			if rows[k].TS == ts {
 				match = k
-				break
+			}
+		}
+		for k := next; k < end && match < 0; k++ { // the same shift as before
+			d := rows[k].TS - ts
+			if d%block == 0 && (!known || d == offset) {
+				match = k
 			}
 		}
 		if match < 0 {
@@ -547,12 +560,11 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 			continue
 		}
 		out[i] = rows[match]
+		offset, known = rows[match].TS-ts, true
 		next = match + 1
 	}
 	return out
 }
-
-func mod(a, b int64) int64 { return ((a % b) + b) % b }
 
 func (c *Chat) reindex() {
 	c.byID = make(map[string]int, len(c.rows))
@@ -905,17 +917,20 @@ func (c *Chat) MarkDeleted(id, text string) (bool, error) {
 		_, exists := c.lookupLocked(id)
 		return exists, err
 	}
+	var metaErr error
 	if file != "" {
 		// Recorded before the entry is written, moved after (moveDeletedLocked).
 		c.a.mu.Lock()
 		c.info.DeletedMedia = append(c.info.DeletedMedia, file)
-		err := c.a.saveMetaLocked()
+		metaErr = c.a.saveMetaLocked()
 		c.a.mu.Unlock()
-		if err != nil {
-			return true, err
-		}
 	}
-	return true, c.saveLocked()
+	// The entry changed in memory: it must be written (or stay dirty) even
+	// if saving chats.json failed.
+	if err := c.saveLocked(); err != nil {
+		return true, err
+	}
+	return true, metaErr
 }
 
 // moveDeletedLocked moves media of deleted entries out of the chat folder,

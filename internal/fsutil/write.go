@@ -9,8 +9,8 @@ import (
 // WriteAtomic replaces path with what fill writes. It writes a temp file in
 // tmpDir (path's own directory when empty; it must be on the same
 // filesystem), syncs it and renames it over path, so neither a reader nor a
-// crash ever sees the file half written, and a crash leaves no temp file
-// next to path.
+// crash ever sees the file half written. A crash can leave the temp file in
+// tmpDir; callers clear it (the archive empties its tmp folder on open).
 func WriteAtomic(path, tmpDir string, mode os.FileMode, fill func(w *bufio.Writer) error) error {
 	if tmpDir == "" {
 		tmpDir = filepath.Dir(path)
