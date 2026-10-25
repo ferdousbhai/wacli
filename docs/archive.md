@@ -45,7 +45,7 @@ Matched against a real iOS export (`internal/archive/testdata`).
   first on the same line; the entry line itself is prefixed with U+200E.
   Kinds: PHOTO .jpg, VIDEO .mp4, AUDIO .opus, STICKER .webp, GIF .mp4;
   documents keep their filename (`NNNNNNNN-<name>`) and are preceded by
-  `<name> • ‎<n> pages`.
+  `<name> • ‎<n> pages`; a shared contact is its card, `NNNNNNNN-<name>.vcf`.
 - `NNNNNNNN` is the entry's 0-based position when it was first written and
   never changes afterwards (a later backfill can make numbers non-monotonic).
   Files merged by `import` keep the export's own names.

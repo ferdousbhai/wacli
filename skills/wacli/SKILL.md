@@ -22,7 +22,8 @@ having with you.
 - Search everything: `grep -r -i "invoice" ~/WhatsApp --include=_chat.txt`
 - Entry format: `[2025-10-24, 05:33:36] Sender: text`. Entries end in `\r\n`;
   newlines inside a message are `\n`. Attachments: `‎<attached: 00000012-PHOTO-….jpg>`
-  is a file in the same folder (read images and PDFs directly). `‎image omitted`
+  is a file in the same folder (read images and PDFs directly; a shared contact
+  is a `.vcf` card). `‎image omitted`
   means the file isn't downloaded (yet, or ever). System lines are attributed to
   the chat name.
 - Invisible U+200E marks precede attachments and system text; mentions are `@⁨Name⁩`.

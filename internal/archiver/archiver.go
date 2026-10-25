@@ -357,6 +357,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	case c.Has(pm.ID):
 		a.requeueMedia(ctx, b, c, pm)
 		a.fillBlank(ctx, b, c, pm)
+		a.refillVCard(b, c, pm)
 		return
 	}
 
@@ -806,6 +807,18 @@ func contactFileName(name string) string {
 		name = "Contact"
 	}
 	return name + ".vcf"
+}
+
+// refillVCard writes the card of a redelivered contact whose file a failed
+// write or a crash left missing: the card is in the message.
+func (a *Archiver) refillVCard(b *batch, c *archive.Chat, pm wa.ParsedMessage) {
+	if pm.VCard == nil {
+		return
+	}
+	if e, ok := c.Get(pm.ID); ok && e.Omitted == contactOmitted && e.Attachment == "" && e.Deleted == "" {
+		name := archive.AttachmentName(c.Position(pm.ID), "document", pm.Timestamp, contactFileName(pm.VCard.Name))
+		a.wrote(b, c, a.placeVCard(c, pm.ID, name, pm.VCard.Data))
+	}
 }
 
 // placeVCard writes a shared contact's card next to the chat as its file.

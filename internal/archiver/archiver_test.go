@@ -918,3 +918,17 @@ func TestContactCardsAttachAVCardAndRSVPsAreHidden(t *testing.T) {
 		t.Errorf("vcf: %q %v", data, err)
 	}
 }
+
+func TestContactCardFileRefilledOnRedelivery(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	card := "BEGIN:VCARD\nFN:Ada\nEND:VCARD"
+	c, _, _ := ar.EnsureChat(group, "Maya", "group", "")
+	c.Insert(archive.Row{ID: "C1", TS: t0, Sender: dana}, func(int) archive.Entry {
+		return archive.Entry{Sender: "Dana Putri", Omitted: contactOmitted} // its file write failed
+	})
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, group, "Maya",
+		web(group, "C1", dana, false, t0, &waE2E.Message{ContactMessage: &waE2E.ContactMessage{DisplayName: proto.String("Ada"), Vcard: proto.String(card)}})))
+	if got := chatFile(t, ar, group); !strings.Contains(got, "<attached: 00000000-Ada.vcf>") {
+		t.Errorf("got %q", got)
+	}
+}
