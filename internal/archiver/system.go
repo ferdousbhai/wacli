@@ -109,7 +109,7 @@ func (a *Archiver) archiveSystem(ctx context.Context, b *batch, chatJID types.JI
 		return
 	}
 	b.use(c)
-	e := archive.Entry{Time: ts, Sender: c.Name(), System: true, Text: text}
+	e := archive.Entry{Time: ts, System: true, Text: text} // Sender: the chat name, filled under the chat lock
 	if c.Has(id) || c.Find(e) {
 		return
 	}

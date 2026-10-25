@@ -102,6 +102,9 @@ func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	if err := c.useLocked(); err != nil {
 		return "", false
 	}
+	if in.System && in.Sender == "" {
+		in.Sender = c.info.Name
+	}
 	window := int64(matchWindow / time.Second)
 	t := in.Time.Unix()
 	bestID, bestD := "", window+1

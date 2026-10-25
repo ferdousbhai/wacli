@@ -379,6 +379,8 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 		err := os.Rename(a.path(oldFolder), a.path(folder))
 		if err == nil {
 			fsutil.Sync(a.opts.Root) // before anything records the new name as done
+			// Deleted media follows (best effort: a leftover only splits it).
+			_ = os.Rename(a.metaPath("deleted", oldFolder), a.metaPath("deleted", folder))
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			err = os.MkdirAll(a.path(folder), 0o700)
@@ -889,6 +891,9 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 	k := sort.Search(len(c.pendingTS), func(i int) bool { return c.pendingTS[i] <= row.TS })
 	pos += len(c.pendingTS) - k
 	e := build(pos)
+	if e.System && e.Sender == "" {
+		e.Sender = c.info.Name // read under the lock a Rename takes
+	}
 	e.Time, e.stamp = time.Unix(row.TS, 0).In(c.a.opts.Location), ""
 	text := Render(e, c.a.opts.DateFormat)
 	switch {
