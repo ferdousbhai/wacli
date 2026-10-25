@@ -674,7 +674,7 @@ func revoke(id, participant string) *waE2E.Message {
 func TestAdminDeletesKeepTheSender(t *testing.T) {
 	a, ar := newTestArchiver(t)
 	a.handle(live(group, dana, "G1", false, t0, text("spam")))
-	a.handle(live(group, me, "R1", true, t0+10, revoke("G1", dana))) // you, as admin
+	a.handle(live(group, me, "R1", true, t0+10, revoke("G1", dana)))  // you, as admin
 	a.handle(live(group, dana, "R2", false, t0+20, revoke("G2", me))) // Dana, as admin, deletes yours (never seen)
 	got := chatFile(t, ar, group)
 	if !strings.Contains(got, "Dana Putri: ‎This message was deleted.\r\n") || strings.Contains(got, "You deleted") ||
