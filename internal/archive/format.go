@@ -120,7 +120,8 @@ func renderBody(e Entry) string {
 }
 
 // The sender may contain a newline: older files kept contact names verbatim.
-var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ([^:]*):(?: |$)`)
+// A sender's name may hold a colon, but not ": " (which ends it).
+var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ([^:]*(?::[^ :][^:]*)*):(?: |$)`)
 
 // Parse reads one entry. Times are interpreted in loc.
 func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
@@ -182,6 +183,8 @@ var generatedNameRE = regexp.MustCompile(`^\d{8}-(PHOTO|VIDEO|AUDIO|STICKER|GIF)
 
 func isGeneratedMediaName(name string) bool { return generatedNameRE.MatchString(name) }
 
+var collisionRE = regexp.MustCompile(`-\d+$`)
+
 // SplitDocLabel splits a document's text into caption and "<name> • ‎<n>
 // pages" label (or just "<name>"), by the name of its file in the folder,
 // which may be shortened: the label starts with it.
@@ -199,6 +202,10 @@ func SplitDocLabel(body, file string) (text, label string) {
 	j := strings.LastIndex(body, name)
 	if j < 0 { // shortened: match by the stem
 		name = strings.TrimSuffix(name, filepath.Ext(name))
+		j = strings.LastIndex(body, name)
+	}
+	if j < 0 { // renamed to a free name: "report-2"
+		name = collisionRE.ReplaceAllString(name, "")
 		j = strings.LastIndex(body, name)
 	}
 	if j < 0 || name == "" {
@@ -377,6 +384,9 @@ func truncateBytes(s string, max int) string {
 // does ("Restructuring Invoice - PT. Acme Holding.pdf").
 func truncateName(name string, max int) string {
 	ext := filepath.Ext(name)
+	if len(ext) > 16 {
+		ext = "" // not an extension: a dot in a long name
+	}
 	stem := []rune(strings.TrimSuffix(name, ext))
 	if len(stem) <= max {
 		return name

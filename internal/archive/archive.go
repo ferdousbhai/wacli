@@ -126,13 +126,14 @@ func Open(opts Options) (*Archive, error) {
 // shortenFolders gives a new folder to a chat whose name was too long for
 // one (from versions that didn't shorten names); the folder never existed.
 func (a *Archive) shortenFolders() {
+	changed := false
 	for jid, info := range a.meta {
 		if len(info.Folder) > maxFolderBytes && info.PrevFolder == "" {
-			info.Folder = a.freeFolderLocked(info.Name, "", jid, "")
-			if !a.opts.ReadOnly {
-				_ = a.saveMetaLocked() // else in memory; tried again next Open
-			}
+			info.Folder, changed = a.freeFolderLocked(info.Name, "", jid, ""), true
 		}
+	}
+	if changed && !a.opts.ReadOnly {
+		_ = a.saveMetaLocked() // else in memory; tried again next Open
 	}
 }
 
