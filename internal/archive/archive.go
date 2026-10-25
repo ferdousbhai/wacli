@@ -1182,7 +1182,9 @@ func (c *Chat) RenameSenders(name func(row Row, sender string) (string, bool)) (
 	n := 0
 	for i, raw := range c.entries {
 		e, err := Parse(raw, c.a.opts.DateFormat, c.a.opts.Location)
-		if err != nil || e.System {
+		// System lines are attributed to the chat (Rename keeps them in
+		// step); a location, poll or call is the sender's own.
+		if err != nil || (e.System && (e.Sender == c.info.Name || e.Sender == CleanName(c.info.Name))) {
 			continue
 		}
 		if newName, ok := name(c.rows[i], e.Sender); ok && newName != e.Sender {

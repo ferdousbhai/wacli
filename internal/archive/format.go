@@ -97,6 +97,8 @@ func renderBody(e Entry) string {
 	switch {
 	case e.Deleted != "":
 		return lrm + e.Deleted
+	case e.System && e.Edited: // a text that starts with U+200E reads back as System
+		return lrm + e.Text + " " + editedMarker
 	case e.System:
 		return lrm + e.Text
 	}
@@ -233,11 +235,13 @@ func SplitDocLabel(body, file string) (text, label string) {
 // the line, so a chat name containing ": " works too.
 func renameSystemSender(raw, oldSender, newSender string) (string, bool) {
 	i := strings.Index(raw, "] ")
-	if i < 0 || oldSender == "" {
+	// Media lines (marked before "[") and deleted messages also have a
+	// body starting with U+200E, but they are the sender's own.
+	if i < 0 || oldSender == "" || strings.HasPrefix(raw, lrm) {
 		return "", false
 	}
 	rest := raw[i+2:]
-	if !strings.HasPrefix(rest, oldSender+": "+lrm) {
+	if body, ok := strings.CutPrefix(rest, oldSender+": "); !ok || !strings.HasPrefix(body, lrm) || body == lrm+DeletedByThem || body == lrm+DeletedByMe {
 		return "", false
 	}
 	return raw[:i+2] + CleanName(newSender) + rest[len(oldSender):], true

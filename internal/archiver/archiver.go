@@ -319,7 +319,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 			if e.Deleted != "" || (e.Text == edit.Text && e.DocLabel == edit.DocLabel && e.Edited) {
 				return false
 			}
-			e.Text, e.DocLabel, e.Edited = edit.Text, edit.DocLabel, true
+			e.Text, e.DocLabel, e.System, e.Edited = edit.Text, edit.DocLabel, edit.System, true
 			return true
 		})
 		a.wrote(b, c, err)
