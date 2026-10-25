@@ -62,3 +62,36 @@ func TestSetHistorySyncLimits(t *testing.T) {
 		t.Fatalf("full with days: %v", cfg)
 	}
 }
+
+func TestBusinessMessagesYieldText(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		m       *waProto.Message
+		text    string
+		buttons bool
+	}{
+		{"template", &waProto.Message{TemplateMessage: &waProto.TemplateMessage{HydratedTemplate: &waProto.TemplateMessage_HydratedFourRowTemplate{
+			Title:               &waProto.TemplateMessage_HydratedFourRowTemplate_HydratedTitleText{HydratedTitleText: "Order"},
+			HydratedContentText: proto.String("Shipped"), HydratedFooterText: proto.String("Shop"),
+			HydratedButtons: []*waProto.HydratedTemplateButton{{}},
+		}}}, "Order\nShipped\n[Shop]", true},
+		{"buttons", &waProto.Message{ButtonsMessage: &waProto.ButtonsMessage{ContentText: proto.String("Pick one"), Buttons: []*waProto.ButtonsMessage_Button{{}}}}, "Pick one", true},
+		{"interactive", &waProto.Message{InteractiveMessage: &waProto.InteractiveMessage{Body: &waProto.InteractiveMessage_Body{Text: proto.String("Hello")}}}, "Hello", false},
+		{"list", &waProto.Message{ListMessage: &waProto.ListMessage{Title: proto.String("Menu"), ButtonText: proto.String("Open")}}, "Menu", true},
+		{"list reply", &waProto.Message{ListResponseMessage: &waProto.ListResponseMessage{Title: proto.String("Pizza")}}, "Pizza", false},
+		{"button reply", &waProto.Message{ButtonsResponseMessage: &waProto.ButtonsResponseMessage{Response: &waProto.ButtonsResponseMessage_SelectedDisplayText{SelectedDisplayText: "Yes"}}}, "Yes", false},
+	} {
+		pm := ParseLiveMessage(liveEvent(tc.m))
+		if pm.Text != tc.text || pm.HasButtons != tc.buttons || !pm.HasContent() {
+			t.Errorf("%s: text=%q buttons=%v", tc.name, pm.Text, pm.HasButtons)
+		}
+	}
+}
+
+func TestPollTrafficIsFlagged(t *testing.T) {
+	vote := ParseLiveMessage(liveEvent(&waProto.Message{PollUpdateMessage: &waE2E.PollUpdateMessage{}}))
+	add := ParseLiveMessage(liveEvent(&waProto.Message{PollAddOptionMessage: &waE2E.PollAddOptionMessage{}}))
+	if !vote.IsPollVote || !add.IsPollAdd {
+		t.Errorf("vote=%v add=%v", vote.IsPollVote, add.IsPollAdd)
+	}
+}

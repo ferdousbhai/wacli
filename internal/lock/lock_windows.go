@@ -29,3 +29,12 @@ func unlockFile(f *os.File) error {
 func isLockContention(err error) bool {
 	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
+
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid) // fails on Windows when there is no such process
+	if err != nil {
+		return false
+	}
+	_ = p.Release()
+	return true
+}

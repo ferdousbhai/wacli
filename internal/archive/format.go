@@ -51,6 +51,16 @@ type Entry struct {
 	stamp string
 }
 
+// MakeDeleted turns e into a "deleted" entry, keeping its time and sender.
+func (e *Entry) MakeDeleted(text string) {
+	*e = Entry{Time: e.Time, Sender: e.Sender, stamp: e.stamp, Deleted: text}
+}
+
+// MakeSystem turns e into a system line, keeping its time and sender.
+func (e *Entry) MakeSystem(text string) {
+	*e = Entry{Time: e.Time, Sender: e.Sender, stamp: e.stamp, System: true, Text: text}
+}
+
 // Render formats e as it appears in _chat.txt, without the trailing EntrySep.
 func Render(e Entry, dateFormat string) string {
 	if dateFormat == "" {

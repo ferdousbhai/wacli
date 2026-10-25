@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func TestSkillNeverOverwritesAHandWrittenOne(t *testing.T) {
 func TestOutdatedSkillIsRefreshed(t *testing.T) {
 	p, _ := testSkillPaths(t)
 	p.install(false)
-	os.WriteFile(filepath.Join(p.dir, skillMarker), []byte("old\n"), 0o644)
+	os.WriteFile(filepath.Join(p.dir, skillMarker), []byte("revision 0\n"), 0o644)
 	if p.state() != skillOutdated {
 		t.Fatalf("state %s", p.state())
 	}
@@ -88,5 +89,14 @@ func TestClaudeLinkLeftAloneWhenItPointsElsewhere(t *testing.T) {
 	p.install(false)
 	if target, _ := os.Readlink(p.claude); target != other {
 		t.Errorf("link now %s", target)
+	}
+}
+
+func TestOlderWacliDoesNotDowngradeTheSkill(t *testing.T) {
+	p, _ := testSkillPaths(t)
+	p.install(false)
+	os.WriteFile(filepath.Join(p.dir, skillMarker), []byte(fmt.Sprintf("revision %d\n", skills.Revision+1)), 0o644)
+	if p.state() != skillNewer {
+		t.Fatalf("state %s", p.state())
 	}
 }

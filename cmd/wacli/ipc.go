@@ -142,9 +142,12 @@ func handleConn(ctx context.Context, s *session, conn net.Conn) {
 	defer conn.Close()
 	var r request
 	dec := json.NewDecoder(conn)
+	// A client that connects and says nothing must not hold up shutdown.
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err := dec.Decode(&r); err != nil {
 		return
 	}
+	_ = conn.SetReadDeadline(time.Time{})
 	// The client waits silently for the answer; if it goes away (Ctrl+C),
 	// stop the work it asked for.
 	ctx, cancel := context.WithCancel(ctx)

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -28,11 +29,23 @@ const matchWindow = 2 * time.Second
 // Merge adds entries from a phone export (parsed from its _chat.txt) that the
 // chat doesn't have yet. srcDir holds the export's attachments. Entries match
 // when sender and time agree within matchWindow and their content agrees. An
-// attachment missing from the export leaves its entry "… omitted".
-func (c *Chat) Merge(entries []Entry, srcDir string) (res MergeResult, err error) {
-	used := map[string]bool{} // each archived entry matches one imported entry
+// attachment missing from the export leaves its entry "… omitted". It stops
+// between entries when ctx ends.
+func (c *Chat) Merge(ctx context.Context, entries []Entry, srcDir string) (res MergeResult, err error) {
+	c.Hold()
+	defer func() {
+		if rerr := c.Release(); err == nil {
+			err = rerr
+		}
+	}()
+	// Match everything first: the export's own new lines must not match
+	// each other (two "ok"s in one second are two messages).
+	used := map[string]bool{}
 	var add []int
 	for i, in := range entries {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		id, found := c.find(in, used)
 		if !found {
 			add = append(add, i)
@@ -40,8 +53,8 @@ func (c *Chat) Merge(entries []Entry, srcDir string) (res MergeResult, err error
 		}
 		used[id] = true
 		res.Matched++
-		if in.Attachment != "" {
-			restored, err := c.restoreMedia(id, in, srcDir)
+		if e, ok := c.Get(id); ok && e.Omitted != "" && in.Attachment != "" {
+			restored, err := c.importFile(id, in.Attachment, srcDir)
 			if err != nil {
 				return res, err
 			}
@@ -50,31 +63,30 @@ func (c *Chat) Merge(entries []Entry, srcDir string) (res MergeResult, err error
 			}
 		}
 	}
-	c.Hold()
-	defer func() {
-		if rerr := c.Release(); err == nil {
-			err = rerr
-		}
-	}()
 	for _, i := range add {
-		in := entries[i]
-		if in.Attachment != "" {
-			if name, ok, err := c.importFile(in.Attachment, srcDir); err != nil {
-				return res, err
-			} else if ok {
-				in.Attachment = name
-			} else {
-				in.Attachment, in.Omitted = "", OmittedText(mediaTypeOf(in.Attachment))
-			}
+		if err := ctx.Err(); err != nil {
+			return res, err
 		}
-		// The export position keeps identical lines (two "ok"s in one
-		// second) apart.
+		in := entries[i]
+		file := in.Attachment
+		if file != "" {
+			in.Attachment, in.Omitted = "", OmittedText(mediaTypeOf(file))
+		}
+		// The export position keeps identical lines apart.
 		sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s", i, Render(in, c.a.opts.DateFormat))))
 		row := Row{ID: "import:" + hex.EncodeToString(sum[:8]), TS: in.Time.Unix()}
-		if _, inserted, err := c.Insert(row, func(int) Entry { return in }); err != nil {
+		_, inserted, err := c.Insert(row, func(int) Entry { return in })
+		if err != nil {
 			return res, err
-		} else if inserted {
-			res.Added++
+		}
+		if !inserted {
+			continue
+		}
+		res.Added++
+		if file != "" {
+			if _, err := c.importFile(row.ID, file, srcDir); err != nil {
+				return res, err
+			}
 		}
 	}
 	return res, nil
@@ -86,6 +98,10 @@ func (c *Chat) Merge(entries []Entry, srcDir string) (res MergeResult, err error
 func (c *Chat) find(in Entry, used map[string]bool) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return "", false
+	}
+	c.mergeLocked() // entries collected during a Hold count too
 	window := int64(matchWindow / time.Second)
 	t := in.Time.Unix()
 	best, bestD := -1, window+1
@@ -135,51 +151,39 @@ func normalizeText(s string) string {
 	return strings.TrimSpace(mentionRE.ReplaceAllString(s, "@"))
 }
 
-func (c *Chat) restoreMedia(id string, in Entry, srcDir string) (bool, error) {
-	if e, ok := c.Get(id); !ok || e.Omitted == "" {
-		return false, nil
-	}
-	name, ok, err := c.importFile(in.Attachment, srcDir)
-	if err != nil || !ok {
-		return false, err
-	}
-	return c.Update(id, func(e *Entry) bool {
-		e.Omitted, e.Attachment = "", name
-		return true
-	})
-}
-
-// importFile copies an export's attachment into the chat folder, keeping its
-// name unless the folder already has a file called that. ok is false when the
-// export doesn't contain the file.
-func (c *Chat) importFile(name, srcDir string) (dst string, ok bool, err error) {
+// importFile copies an export's attachment for entry id into the chat folder
+// (through the temp folder, placed under the chat lock like a download). It
+// reports false when the export doesn't contain the file.
+func (c *Chat) importFile(id, name, srcDir string) (bool, error) {
 	base := filepath.Base(name)
 	if base != name || base == "." || base == ".." {
-		return "", false, fmt.Errorf("unsafe attachment name %q", name)
+		return false, fmt.Errorf("unsafe attachment name %q", name)
 	}
 	src, err := os.Open(filepath.Join(srcDir, base))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
+		return false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return false, err
 	}
 	defer src.Close()
-	dir := c.Dir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", false, err
-	}
-	dst = freeName(dir, base)
-	out, err := os.OpenFile(filepath.Join(dir, dst), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	tmp, err := os.CreateTemp(c.a.TmpDir(), "import-*")
 	if err != nil {
-		return "", false, err
+		return false, err
 	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		os.Remove(out.Name())
-		return "", false, err
+	if _, err = io.Copy(tmp, src); err == nil {
+		err = tmp.Close()
+	} else {
+		tmp.Close()
 	}
-	return dst, true, out.Close()
+	if err == nil {
+		_, err = c.PlaceAttachment(id, tmp.Name(), base, nil)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	return true, nil
 }
 
 // ReadExport parses an unzipped export folder's _chat.txt.

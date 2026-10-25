@@ -18,9 +18,12 @@ messages keep arriving. There is no message database: the folders are the data.
     chats.json                                JID → folder, chat kind, names
     index/<jid>.tsv                           one row per _chat.txt entry, same order:
                                               msg id, unix ts, from_me, sender JID
+    index/<jid>.tsv.orphaned-<time>           index set aside when a chat folder went missing
     pending-media.json                        media not downloaded yet (keys to retry)
     status.json                               written by a running sync; read by `wacli doctor`
-    deleted/                                  media of messages later deleted for everyone
+    deleted/<folder>/                         media of messages later deleted for everyone
+    names-scanned                             marks the one-time pass that named old chats
+    tmp/                                      downloads and file writes in progress
 ~/.local/state/wacli/                         session store (--store, WACLI_STORE_DIR)
   session.db                                  WhatsApp login + Signal keys (whatsmeow)
   LOCK                                        held by the one process using the session

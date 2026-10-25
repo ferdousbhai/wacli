@@ -1,6 +1,7 @@
 package archiver
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/wa"
@@ -53,20 +56,22 @@ type mediaQueue struct {
 	dirty   bool
 	// placed holds downloads moved into their chat folder whose entry isn't
 	// on disk yet; settle writes those chats once and then dequeues them.
-	placed map[string][]string // chat JID → item keys
+	placed     map[string][]string // chat JID → item keys
+	placedKeys map[string]bool     // the same keys; due skips them
 }
 
 const mediaWorkers = 8
 
 func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 	q := &mediaQueue{
-		a:       a,
-		path:    filepath.Join(a.ar.Root(), ".wacli", "pending-media.json"),
-		items:   map[string]*pendingMedia{},
-		active:  map[string]bool{},
-		wake:    make(chan struct{}, 1),
-		retries: map[string]chan *events.MediaRetry{},
-		placed:  map[string][]string{},
+		a:          a,
+		path:       filepath.Join(a.ar.Root(), ".wacli", "pending-media.json"),
+		items:      map[string]*pendingMedia{},
+		active:     map[string]bool{},
+		wake:       make(chan struct{}, 1),
+		retries:    map[string]chan *events.MediaRetry{},
+		placed:     map[string][]string{},
+		placedKeys: map[string]bool{},
 	}
 	data, err := os.ReadFile(q.path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -75,7 +80,14 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 	if len(data) > 0 {
 		var list []*pendingMedia
 		if err := json.Unmarshal(data, &list); err != nil {
-			return nil, err
+			// Don't let a damaged queue stop sync: keep it for inspection
+			// and start empty (those entries stay "omitted").
+			aside := fmt.Sprintf("%s.corrupt-%d", q.path, time.Now().Unix())
+			a.logf("warning: download queue unreadable (%v); moved to %s", err, aside)
+			if err := os.Rename(q.path, aside); err != nil {
+				return nil, err
+			}
+			list = nil
 		}
 		for _, p := range list {
 			if p.Gone {
@@ -126,35 +138,32 @@ func (q *mediaQueue) poke() {
 // couple of seconds (the queue can hold thousands of items).
 func (q *mediaQueue) saveLocked() { q.dirty = true }
 
-// flush writes the queue if it changed.
+// flush writes the queue if it changed. On failure it stays marked, so the
+// next flush tries again.
 func (q *mediaQueue) flush() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.dirty {
-		q.writeLocked()
-		q.dirty = false
+	if !q.dirty {
+		return
 	}
+	if err := q.writeLocked(); err != nil {
+		q.a.logf("warning: saving the download queue: %v", err)
+		return
+	}
+	q.dirty = false
 }
 
-func (q *mediaQueue) writeLocked() {
+func (q *mediaQueue) writeLocked() error {
 	list := make([]*pendingMedia, 0, len(q.items))
 	for _, p := range q.items {
 		list = append(list, p)
 	}
-	data, err := json.MarshalIndent(list, "", " ")
-	if err != nil {
-		return
-	}
-	tmp := q.path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, q.path)
-	}
+	return fsutil.WriteAtomic(q.path, q.a.ar.TmpDir(), 0o600, func(w *bufio.Writer) error {
+		return json.NewEncoder(w).Encode(list)
+	})
 }
 
-// run downloads queued media until ctx ends, saving the queue every couple of
-// seconds and once more on the way out.
 func (q *mediaQueue) run(ctx context.Context) {
-	_ = os.RemoveAll(q.tmpDir()) // partial downloads of an earlier run
 	var wg sync.WaitGroup
 	jobs := make(chan *pendingMedia)
 	for range mediaWorkers {
@@ -198,7 +207,8 @@ func (q *mediaQueue) run(ctx context.Context) {
 	}
 }
 
-func (q *mediaQueue) tmpDir() string { return filepath.Join(q.a.ar.Root(), ".wacli", "tmp") }
+// tmpDir holds downloads in progress; opening the archive clears it.
+func (q *mediaQueue) tmpDir() string { return filepath.Join(q.a.ar.TmpDir(), "media") }
 
 // settle writes the chats that received files and only then takes those
 // files off the queue, so a crash can't leave an entry "omitted" with
@@ -219,6 +229,7 @@ func (q *mediaQueue) settle() {
 		} else {
 			for _, k := range keys {
 				delete(q.items, k)
+				delete(q.placedKeys, k)
 			}
 			q.saveLocked()
 		}
@@ -233,12 +244,17 @@ func (q *mediaQueue) due() []*pendingMedia {
 	if !q.a.wa.IsConnected() {
 		return nil
 	}
+	return q.take(time.Now())
+}
+
+// take marks and returns the items ready to download at now: not running,
+// not already placed and waiting for their chat to be written, not backing off.
+func (q *mediaQueue) take(now time.Time) []*pendingMedia {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	now := time.Now()
 	var out []*pendingMedia
 	for k, p := range q.items {
-		if q.active[k] || now.Before(p.NextTry) {
+		if q.active[k] || q.placedKeys[k] || now.Before(p.NextTry) {
 			continue
 		}
 		q.active[k] = true
@@ -307,14 +323,14 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 		q.failed(p, err)
 		return
 	}
-	deleted := filepath.Join(q.a.ar.Root(), ".wacli", "deleted", filepath.Base(c.Dir()))
-	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name, deleted); err != nil {
+	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name, p.SHA256); err != nil {
 		_ = os.Remove(tmp)
 		q.failed(p, err)
 		return
 	}
 	q.mu.Lock()
 	q.placed[p.Chat] = append(q.placed[p.Chat], p.key())
+	q.placedKeys[p.key()] = true
 	q.mu.Unlock()
 	q.a.touch()
 }
@@ -328,13 +344,21 @@ func (q *mediaQueue) dropUndownloadable(c *archive.Chat, p *pendingMedia) {
 		if e.Text != "" {
 			text += ": " + e.Text
 		}
-		*e = archive.Entry{Time: e.Time, Sender: e.Sender, System: true, Text: text}
+		e.MakeSystem(text)
 		return true
 	})
 	if err != nil {
 		q.a.logf("warning: %v", err)
 	}
 	q.forget(p.Chat, p.ID)
+}
+
+// queued reports whether a download for this message is queued or running.
+func (q *mediaQueue) queued(chat, id string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	_, ok := q.items[chat+"|"+id]
+	return ok
 }
 
 // maxAttempts bounds retries; with the backoff that is several days.

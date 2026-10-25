@@ -105,3 +105,16 @@ func TestProbeReadOnlyStaleLock(t *testing.T) {
 		t.Fatalf("Probe info = %q, want empty stale info", info)
 	}
 }
+
+func TestProbeSeesALiveHolderWithoutTakingTheLock(t *testing.T) {
+	dir := t.TempDir()
+	lk, err := Acquire(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Release()
+	held, _, err := Probe(dir)
+	if err != nil || !held {
+		t.Fatalf("held=%v err=%v", held, err)
+	}
+}

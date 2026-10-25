@@ -435,15 +435,52 @@ func TestFinishedDownloadLeavesQueueOnlyOnceWritten(t *testing.T) {
 	}
 	src := filepath.Join(t.TempDir(), "dl")
 	os.WriteFile(src, []byte("jpg"), 0o600)
-	if _, err := c.PlaceAttachment(p.ID, src, p.Name, t.TempDir()); err != nil {
+	if _, err := c.PlaceAttachment(p.ID, src, p.Name, nil); err != nil {
 		t.Fatal(err)
 	}
 	a.media.placed[p.Chat] = []string{p.key()}
+	a.media.placedKeys[p.key()] = true
 	if strings.Contains(chatFile(t, ar, group), "<attached:") {
 		t.Fatal("written before settle; expected one write per batch")
 	}
 	a.media.settle()
 	if !strings.Contains(chatFile(t, ar, group), "<attached: "+p.Name+">") || a.PendingMedia() != 0 {
 		t.Errorf("after settle: pending=%d file=%q", a.PendingMedia(), chatFile(t, ar, group))
+	}
+}
+
+func TestPlacedDownloadIsNotHandedOutAgain(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32)}}
+	a.handle(live(group, dana, "M1", false, t0, img))
+	for k := range a.media.items {
+		a.media.placedKeys[k] = true // downloaded; its chat not written yet
+	}
+	if got := a.media.take(time.Now()); len(got) != 0 {
+		t.Errorf("handed out again: %v", got)
+	}
+}
+
+func TestRedeliveredOmittedMediaIsQueuedAgain(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32)}}
+	a.handle(live(group, dana, "M1", false, t0, img))
+	for k := range a.media.items { // crash before the queue was saved
+		delete(a.media.items, k)
+	}
+	a.handle(live(group, dana, "M1", false, t0, img)) // WhatsApp delivers it again
+	if a.PendingMedia() != 1 {
+		t.Errorf("pending = %d, want 1", a.PendingMedia())
+	}
+}
+
+func TestCorruptQueueFileDoesNotStopSync(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	os.WriteFile(a.media.path, []byte("{torn"), 0o600)
+	if _, err := New(ar, a.wa, t.Logf); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if m, _ := filepath.Glob(a.media.path + ".corrupt-*"); len(m) != 1 {
+		t.Error("damaged queue not kept aside")
 	}
 }

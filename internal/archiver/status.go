@@ -1,12 +1,15 @@
 package archiver
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -85,11 +88,10 @@ func (a *Archiver) writeStatus() {
 	if err != nil {
 		return
 	}
-	path := StatusPath(a.ar.Root())
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	_ = fsutil.WriteAtomic(StatusPath(a.ar.Root()), a.ar.TmpDir(), 0o600, func(w *bufio.Writer) error {
+		_, err := w.Write(data)
+		return err
+	})
 }
 
 func (a *Archiver) reportStatus(ctx context.Context) {

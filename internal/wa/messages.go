@@ -34,42 +34,12 @@ type Location struct {
 	IsLive    bool
 }
 
-type Button struct {
-	Type         string `json:"type"`
-	DisplayText  string `json:"display_text"`
-	ID           string `json:"id,omitempty"`
-	URL          string `json:"url,omitempty"`
-	PhoneNumber  string `json:"phone_number,omitempty"`
-	Description  string `json:"description,omitempty"`
-	ResponseType string `json:"response_type,omitempty"`
-	Index        int    `json:"index,omitempty"`
-}
-
 // Poll captures the question + option list extracted from an incoming
 // PollCreationMessage (any of V1/V2/V3/V4/V5/V6).
 type Poll struct {
 	Question        string
 	Options         []string
 	SelectableCount uint32
-}
-
-// PollVoteRef references the original poll a PollUpdateMessage is voting on.
-// Decryption of the vote happens later in the sync handler.
-type PollVoteRef struct {
-	PollMessageID string
-	PollChatJID   string
-	PollSenderJID string
-	SenderTsMS    int64
-}
-
-// PollAddOptionRef references an added option for an existing poll. Encrypted
-// add-option messages initially carry only the poll key; the option is filled
-// after decryption in the sync layer.
-type PollAddOptionRef struct {
-	PollMessageID string
-	PollChatJID   string
-	PollSenderJID string
-	Option        string
 }
 
 type ParsedMessage struct {
@@ -79,12 +49,12 @@ type ParsedMessage struct {
 	Timestamp     time.Time
 	FromMe        bool
 	Text          string
-	Buttons       []Button
+	HasButtons    bool // business message with buttons or a list
 	Media         *Media
 	Location      *Location
 	Poll          *Poll
-	PollVote      *PollVoteRef
-	PollAdd       *PollAddOptionRef
+	IsPollVote    bool // a vote on a poll, not shown in exports
+	IsPollAdd     bool // an option added to a poll, not shown in exports
 	PushName      string
 	MentionedJIDs []string
 	ReactionToID  string
@@ -152,12 +122,12 @@ func (pm ParsedMessage) HasContent() bool {
 	return strings.TrimSpace(pm.Text) != "" ||
 		pm.Media != nil ||
 		pm.Poll != nil ||
-		pm.PollVote != nil ||
-		pm.PollAdd != nil ||
+		pm.IsPollVote ||
+		pm.IsPollAdd ||
 		pm.Call != nil ||
 		pm.Location != nil ||
 		pm.Revoked ||
-		len(pm.Buttons) > 0 ||
+		pm.HasButtons ||
 		strings.TrimSpace(pm.ReactionToID) != "" ||
 		strings.TrimSpace(pm.ReactionEmoji) != ""
 }
@@ -369,55 +339,16 @@ func pickPollCreation(m *waProto.Message) *waProto.PollCreationMessage {
 }
 
 func extractPollUpdate(m *waProto.Message, pm *ParsedMessage) {
-	update := m.GetPollUpdateMessage()
-	if update == nil {
-		return
-	}
-	key := update.GetPollCreationMessageKey()
-	ref := &PollVoteRef{}
-	if key != nil {
-		ref.PollMessageID = strings.TrimSpace(key.GetID())
-		ref.PollChatJID = strings.TrimSpace(key.GetRemoteJID())
-		ref.PollSenderJID = strings.TrimSpace(key.GetParticipant())
-	}
-	ref.SenderTsMS = update.GetSenderTimestampMS()
-	pm.PollVote = ref
-	if pm.Text == "" {
-		pm.Text = "Poll vote"
+	if m.GetPollUpdateMessage() != nil {
+		pm.IsPollVote = true
 	}
 }
 
 func extractPollAddOption(m *waProto.Message, pm *ParsedMessage) {
-	add := m.GetPollAddOptionMessage()
-	if add != nil {
-		pm.PollAdd = pollAddOptionRef(add.GetPollCreationMessageKey(), add.GetAddOption().GetOptionName())
-		if pm.Text == "" {
-			pm.Text = "Poll option added"
-		}
-		return
-	}
 	secret := m.GetSecretEncryptedMessage()
-	if secret == nil || secret.GetSecretEncType() != waE2E.SecretEncryptedMessage_POLL_ADD_OPTION {
-		return
+	if m.GetPollAddOptionMessage() != nil || secret.GetSecretEncType() == waE2E.SecretEncryptedMessage_POLL_ADD_OPTION && secret != nil {
+		pm.IsPollAdd = true
 	}
-	pm.PollAdd = pollAddOptionRef(secret.GetTargetMessageKey(), "")
-	if pm.Text == "" {
-		pm.Text = "Poll option added"
-	}
-}
-
-func pollAddOptionRef(key interface {
-	GetID() string
-	GetRemoteJID() string
-	GetParticipant() string
-}, option string) *PollAddOptionRef {
-	ref := &PollAddOptionRef{Option: strings.TrimSpace(option)}
-	if key != nil {
-		ref.PollMessageID = strings.TrimSpace(key.GetID())
-		ref.PollChatJID = strings.TrimSpace(key.GetRemoteJID())
-		ref.PollSenderJID = strings.TrimSpace(key.GetParticipant())
-	}
-	return ref
 }
 
 func extractPlainText(m *waProto.Message, pm *ParsedMessage) {

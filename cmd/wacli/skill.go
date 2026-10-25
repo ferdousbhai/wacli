@@ -1,13 +1,14 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 
 	"github.com/ferdousbhai/wacli/skills"
 	"github.com/spf13/cobra"
@@ -34,17 +35,13 @@ func defaultSkillPaths() (skillPaths, error) {
 	}, nil
 }
 
-func skillHash() string {
-	sum := sha256.Sum256(skills.Wacli)
-	return hex.EncodeToString(sum[:])
-}
-
 type skillState string
 
 const (
 	skillMissing   skillState = "not installed"
 	skillCurrent   skillState = "installed"
 	skillOutdated  skillState = "outdated"
+	skillNewer     skillState = "installed by a newer wacli"
 	skillUnmanaged skillState = "not managed by wacli"
 )
 
@@ -56,8 +53,15 @@ func (p skillPaths) state() skillState {
 	if err != nil {
 		return skillUnmanaged
 	}
-	if string(marker) != skillHash()+"\n" {
+	var rev int
+	if _, err := fmt.Sscanf(string(marker), "revision %d", &rev); err != nil {
+		return skillOutdated // a marker from before revisions
+	}
+	switch {
+	case rev < skills.Revision:
 		return skillOutdated
+	case rev > skills.Revision:
+		return skillNewer
 	}
 	return skillCurrent
 }
@@ -77,13 +81,7 @@ func (p skillPaths) install(force bool) ([]string, error) {
 		}
 		done = append(done, "kept the previous skill as "+backup)
 	}
-	if err := os.MkdirAll(p.dir, 0o755); err != nil {
-		return nil, err
-	}
-	if err := writeAtomic(filepath.Join(p.dir, "SKILL.md"), skills.Wacli, 0o644); err != nil {
-		return nil, err
-	}
-	if err := writeAtomic(filepath.Join(p.dir, skillMarker), []byte(skillHash()+"\n"), 0o644); err != nil {
+	if err := p.writeFiles(); err != nil {
 		return nil, err
 	}
 	done = append(done, "installed "+p.dir+" (Codex and other agents reading ~/.agents/skills)")
@@ -91,6 +89,24 @@ func (p skillPaths) install(force bool) ([]string, error) {
 		done = append(done, msg)
 	}
 	return done, nil
+}
+
+// writeFiles writes the skill and its marker (the marker last, so a crash
+// in between reads as outdated and is fixed by the next run).
+func (p skillPaths) writeFiles() error {
+	if err := os.MkdirAll(p.dir, 0o755); err != nil {
+		return err
+	}
+	write := func(name string, data []byte) error {
+		return fsutil.WriteAtomic(filepath.Join(p.dir, name), "", 0o644, func(w *bufio.Writer) error {
+			_, err := w.Write(data)
+			return err
+		})
+	}
+	if err := write("SKILL.md", skills.Wacli); err != nil {
+		return err
+	}
+	return write(skillMarker, []byte(fmt.Sprintf("revision %d\n", skills.Revision)))
 }
 
 // linkClaude links the skill into Claude Code's skills when Claude Code is
@@ -154,7 +170,8 @@ func refreshSkill() {
 	if err != nil || p.state() != skillOutdated {
 		return
 	}
-	_, _ = p.install(false)
+	// Files only: a Claude Code link the user removed stays removed.
+	_ = p.writeFiles()
 }
 
 func resolve(link, target string) string {
@@ -162,14 +179,6 @@ func resolve(link, target string) string {
 		target = filepath.Join(filepath.Dir(link), target)
 	}
 	return filepath.Clean(target)
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 func newSkillCmd() *cobra.Command {

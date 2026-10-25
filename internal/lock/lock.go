@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,38 +55,35 @@ func IsLocked(err error) bool {
 	return errors.Is(err, ErrLocked)
 }
 
+// Probe reports whether another process holds the lock, without taking it
+// (taking it, even briefly, would make a wacli starting at that moment fail).
+// It reads the PID the holder wrote and checks that process is alive.
 func Probe(storeDir string) (bool, string, error) {
-	path := filepath.Join(storeDir, "LOCK")
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	b, err := os.ReadFile(filepath.Join(storeDir, "LOCK"))
+	if os.IsNotExist(err) {
+		return false, "", nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, "", nil
-		}
-		if !errors.Is(err, os.ErrPermission) {
-			return false, "", fmt.Errorf("open lock file: %w", err)
-		}
-		f, err = os.OpenFile(path, os.O_RDONLY, 0)
-		if err != nil {
-			return false, "", fmt.Errorf("open lock file: %w", err)
+		return false, "", fmt.Errorf("read lock file: %w", err)
+	}
+	info := strings.TrimSpace(string(b))
+	var pid int
+	for _, line := range strings.Split(info, "\n") {
+		if v, ok := strings.CutPrefix(line, "pid="); ok {
+			pid, _ = strconv.Atoi(v)
 		}
 	}
-	defer f.Close()
-
-	if err := lockFile(f); err != nil {
-		if !isLockContention(err) {
-			return false, "", fmt.Errorf("lock file: %w", err)
-		}
-		b, _ := os.ReadFile(path)
-		return true, strings.TrimSpace(string(b)), nil
+	if pid <= 0 || !processAlive(pid) {
+		return false, "", nil
 	}
-	_ = unlockFile(f)
-	return false, "", nil
+	return true, info, nil
 }
 
 func (l *Lock) Release() error {
 	if l == nil || l.f == nil {
 		return nil
 	}
+	_ = l.f.Truncate(0) // no stale PID for Probe
 	_ = unlockFile(l.f)
 	err := l.f.Close()
 	l.f = nil

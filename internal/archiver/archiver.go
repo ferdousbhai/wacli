@@ -85,6 +85,22 @@ func (a *Archiver) Start(ctx context.Context) {
 	a.background(a.media.run)
 	a.background(a.reportStatus)
 	a.background(a.refreshNamesLoop)
+	a.background(a.trimLoop)
+}
+
+// trimLoop unloads chats nobody touched for a while, so the sync process
+// doesn't end up holding the whole archive in memory.
+func (a *Archiver) trimLoop(ctx context.Context) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.ar.Trim(10 * time.Minute)
+		}
+	}
 }
 
 func (a *Archiver) background(fn func(context.Context)) {
@@ -243,7 +259,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	if pm.ID == "" || pm.Chat.IsEmpty() || skipChat(pm.Chat) {
 		return
 	}
-	if pm.ReactionToID != "" || pm.ReactionEmoji != "" || pm.PollVote != nil || pm.PollAdd != nil {
+	if pm.ReactionToID != "" || pm.ReactionEmoji != "" || pm.IsPollVote || pm.IsPollAdd {
 		return
 	}
 	if !pm.HasContent() && !pm.Edited && invisiblePayload(pm.UnhandledPayload) {
@@ -273,6 +289,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.wrote(b, c, err)
 		return
 	case c.Has(pm.ID):
+		a.requeueMedia(c, pm)
 		return
 	}
 
@@ -296,6 +313,20 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.added.Add(1)
 	}
 	a.wrote(b, c, err)
+}
+
+// requeueMedia queues a redelivered media message whose entry is still
+// "omitted" but whose download isn't queued: a crash between writing the
+// entry and saving the queue would otherwise leave it omitted forever.
+func (a *Archiver) requeueMedia(c *archive.Chat, pm wa.ParsedMessage) {
+	if pm.Media == nil || pm.Location != nil || !archive.Downloadable(pm.Media.Type) || a.media.queued(c.JID(), pm.ID) {
+		return
+	}
+	if e, ok := c.Get(pm.ID); !ok || e.Omitted == "" || e.Deleted != "" {
+		return
+	}
+	a.media.add(c, pm, archive.AttachmentName(c.Len(), pm.Media.Type, pm.Timestamp.In(a.ar.Location()), pm.Media.Filename))
+	a.media.flush()
 }
 
 // wrote finishes a write: outside a history batch it makes sure the change
@@ -434,7 +465,7 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 			return false
 		}
 		attachment = e.Attachment
-		*e = archive.Entry{Time: e.Time, Sender: e.Sender, Deleted: text}
+		e.MakeDeleted(text)
 		return true
 	})
 	a.wrote(b, c, err)

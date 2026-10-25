@@ -2,9 +2,12 @@ package archive
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 )
 
 const (
@@ -66,7 +71,8 @@ type Archive struct {
 	mu       sync.Mutex
 	meta     map[string]*ChatInfo
 	chats    map[string]*Chat
-	problems []string // found while opening chats; see Problems
+	probMu   sync.Mutex
+	problems []string // found while loading chats; see Problems
 }
 
 func Open(opts Options) (*Archive, error) {
@@ -83,8 +89,15 @@ func Open(opts Options) (*Archive, error) {
 		opts.Logf = func(string, ...any) {}
 	}
 	if !opts.ReadOnly {
-		if err := os.MkdirAll(filepath.Join(opts.Root, metaDir, indexDir), 0o700); err != nil {
+		// Temp files left by a crash are removed; nothing else writes here
+		// while this process holds the session lock.
+		if err := os.RemoveAll(filepath.Join(opts.Root, metaDir, "tmp")); err != nil {
 			return nil, err
+		}
+		for _, d := range []string{indexDir, "tmp"} {
+			if err := os.MkdirAll(filepath.Join(opts.Root, metaDir, d), 0o700); err != nil {
+				return nil, err
+			}
 		}
 	}
 	a := &Archive{opts: opts, meta: map[string]*ChatInfo{}, chats: map[string]*Chat{}}
@@ -139,8 +152,8 @@ func (a *Archive) metaPath(p ...string) string {
 
 // Problems lists what opening chats found and fixed or worked around.
 func (a *Archive) Problems() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.probMu.Lock()
+	defer a.probMu.Unlock()
 	return append([]string(nil), a.problems...)
 }
 
@@ -190,7 +203,10 @@ func (a *Archive) saveMetaLocked() error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(a.metaPath(chatsFile), append(data, '\n'))
+	return a.writeFile(a.metaPath(chatsFile), func(w *bufio.Writer) error {
+		_, err := w.Write(append(data, '\n'))
+		return err
+	})
 }
 
 // Chat returns an existing chat.
@@ -209,11 +225,33 @@ func (a *Archive) chatLocked(jid string) (*Chat, error) {
 		return nil, fmt.Errorf("unknown chat %s", jid)
 	}
 	c := &Chat{a: a, info: info}
-	if err := c.load(); err != nil {
+	c.mu.Lock()
+	err := c.useLocked()
+	c.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	a.chats[jid] = c
 	return c, nil
+}
+
+// Trim unloads chats untouched for idle that have nothing unwritten; they
+// reload from disk on next use. The Chat values stay, so nothing holding
+// one ever sees a stale copy.
+func (a *Archive) Trim(idle time.Duration) {
+	a.mu.Lock()
+	chats := make([]*Chat, 0, len(a.chats))
+	for _, c := range a.chats {
+		chats = append(chats, c)
+	}
+	a.mu.Unlock()
+	for _, c := range chats {
+		c.mu.Lock()
+		if c.loaded && !c.dirty && c.hold == 0 && len(c.pending) == 0 && time.Since(c.lastUsed) > idle {
+			c.rows, c.entries, c.byID, c.loaded = nil, nil, nil, false
+		}
+		c.mu.Unlock()
+	}
 }
 
 // EnsureChat returns the chat, creating its folder on first use. suffix
@@ -318,6 +356,9 @@ func (a *Archive) Rename(jid, name, suffix string) (string, error) {
 		return "", err
 	}
 
+	if err := c.useLocked(); err != nil {
+		return "", err
+	}
 	c.mergeLocked()
 	changed := false
 	for i, raw := range c.entries {
@@ -348,6 +389,22 @@ type Chat struct {
 	// pending holds entries inserted during a Hold until they are merged.
 	pending     []pendingEntry
 	pendingByID map[string]int
+	pendingTS   []int64   // pending timestamps, newest first
+	loaded      bool      // rows and entries are in memory (see Trim)
+	lastUsed    time.Time // for Trim
+}
+
+// useLocked loads the chat if Trim unloaded it, and notes the use.
+func (c *Chat) useLocked() error {
+	c.lastUsed = time.Now()
+	if c.loaded {
+		return nil
+	}
+	if err := c.load(); err != nil {
+		return err
+	}
+	c.loaded = true
+	return nil
 }
 
 func (c *Chat) JID() string { return c.info.JID }
@@ -373,7 +430,9 @@ func indexFileName(jid string) string {
 
 func (c *Chat) problem(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	c.a.problems = append(c.a.problems, msg) // load runs under a.mu
+	c.a.probMu.Lock()
+	c.a.problems = append(c.a.problems, msg)
+	c.a.probMu.Unlock()
 	c.a.opts.Logf("%s", msg)
 }
 
@@ -483,7 +542,7 @@ func (c *Chat) mergeLocked() {
 		rows, entries = append(rows, p.row), append(entries, p.text)
 	}
 	c.rows, c.entries = append(rows, c.rows[i:]...), append(entries, c.entries[i:]...)
-	c.pending, c.pendingByID = nil, nil
+	c.pending, c.pendingByID, c.pendingTS = nil, nil, nil
 	c.reindex()
 }
 
@@ -501,12 +560,19 @@ func (c *Chat) lookupLocked(id string) (text *string, ok bool) {
 func (c *Chat) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return 0
+	}
 	return len(c.rows) + len(c.pending)
 }
 
 func (c *Chat) Has(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		c.a.opts.Logf("warning: %v", err)
+		return false
+	}
 	_, ok := c.lookupLocked(id)
 	return ok
 }
@@ -515,6 +581,9 @@ func (c *Chat) Has(id string) bool {
 func (c *Chat) Rows() []Row {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return nil
+	}
 	c.mergeLocked()
 	return append([]Row(nil), c.rows...)
 }
@@ -523,6 +592,9 @@ func (c *Chat) Rows() []Row {
 func (c *Chat) Get(id string) (Entry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return Entry{}, false
+	}
 	text, ok := c.lookupLocked(id)
 	if !ok {
 		return Entry{}, false
@@ -571,10 +643,17 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return 0, false, err
+	}
 	if _, ok := c.lookupLocked(row.ID); ok {
 		return 0, false, nil
 	}
 	pos = sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS > row.TS })
+	// Entries collected during a Hold count too. pendingTS is kept newest
+	// first, the order history arrives in, so this is usually an append.
+	k := sort.Search(len(c.pendingTS), func(i int) bool { return c.pendingTS[i] <= row.TS })
+	pos += len(c.pendingTS) - k
 	e := build(pos)
 	e.Time, e.stamp = time.Unix(row.TS, 0).In(c.a.opts.Location), ""
 	text := Render(e, c.a.opts.DateFormat)
@@ -585,6 +664,9 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 		}
 		c.pendingByID[row.ID] = len(c.pending)
 		c.pending = append(c.pending, pendingEntry{row, text})
+		c.pendingTS = append(c.pendingTS, 0)
+		copy(c.pendingTS[k+1:], c.pendingTS[k:])
+		c.pendingTS[k] = row.TS
 		c.dirty = true
 		return pos, true, nil
 	case pos == len(c.rows) && !c.dirty:
@@ -622,6 +704,9 @@ func (c *Chat) Update(id string, fn func(e *Entry) bool) (bool, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return false, err
+	}
 	changed, err := c.updateLocked(id, fn)
 	if err != nil || !changed {
 		return changed, err
@@ -649,14 +734,20 @@ func (c *Chat) updateLocked(id string, fn func(e *Entry) bool) (bool, error) {
 // (a rename may have moved it since the download started), under want or a
 // free variant of it, and points the entry at it. The change is written by
 // the next Flush, so many finished downloads cost one write. If the entry
-// was deleted meanwhile the file goes to deletedDir; if it already has a
+// was deleted meanwhile the file goes to .wacli/deleted; if it already has a
 // file (an import restored it) the download is dropped.
-func (c *Chat) PlaceAttachment(id, src, want, deletedDir string) (string, error) {
+//
+// If want already holds the same file (sha256), it's a download a crash
+// interrupted after the move; that file is kept instead of a copy.
+func (c *Chat) PlaceAttachment(id, src, want string, sha256sum []byte) (string, error) {
 	if c.a.opts.ReadOnly {
 		return "", ErrReadOnly
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return "", err
+	}
 	text, ok := c.lookupLocked(id)
 	if !ok {
 		return "", os.Remove(src)
@@ -667,6 +758,7 @@ func (c *Chat) PlaceAttachment(id, src, want, deletedDir string) (string, error)
 	}
 	switch {
 	case e.Deleted != "":
+		deletedDir := c.deletedDirLocked()
 		if err := os.MkdirAll(deletedDir, 0o700); err != nil {
 			return "", err
 		}
@@ -678,15 +770,39 @@ func (c *Chat) PlaceAttachment(id, src, want, deletedDir string) (string, error)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	name := freeName(dir, filepath.Base(want))
-	if err := os.Rename(src, filepath.Join(dir, name)); err != nil {
-		return "", err
+	name := filepath.Base(want)
+	if len(sha256sum) > 0 && fileHasSHA256(filepath.Join(dir, name), sha256sum) {
+		if err := os.Remove(src); err != nil {
+			return "", err
+		}
+	} else {
+		name = freeName(dir, name)
+		if err := os.Rename(src, filepath.Join(dir, name)); err != nil {
+			return "", err
+		}
 	}
 	e.Omitted, e.Attachment = "", name
 	*text = Render(e, c.a.opts.DateFormat)
 	c.dirty = true
 	return name, nil
 }
+
+func fileHasSHA256(path string, want []byte) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false
+	}
+	return bytes.Equal(h.Sum(nil), want)
+}
+
+// deletedDirLocked is where media of messages deleted for everyone is kept:
+// outside the chat folder, which stays identical to an export.
+func (c *Chat) deletedDirLocked() string { return c.a.metaPath("deleted", c.info.Folder) }
 
 // freeName returns name, or name-2, name-3… if dir already has that file.
 func freeName(dir, name string) string {
@@ -706,6 +822,9 @@ func (c *Chat) RenameSenders(name func(row Row, sender string) (string, bool)) (
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.useLocked(); err != nil {
+		return 0, err
+	}
 	c.mergeLocked()
 	n := 0
 	for i, raw := range c.entries {
@@ -741,11 +860,12 @@ func (c *Chat) flushLocked() error {
 	if err := os.MkdirAll(c.dirLocked(), 0o700); err != nil {
 		return err
 	}
-	err := writeAtomic(c.chatPath(), func(w *bufio.Writer) {
+	err := c.a.writeFile(c.chatPath(), func(w *bufio.Writer) error {
 		for _, e := range c.entries {
 			w.WriteString(e)
 			w.WriteString(EntrySep)
 		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -758,10 +878,11 @@ func (c *Chat) flushLocked() error {
 }
 
 func (c *Chat) writeIndex() error {
-	return writeAtomic(c.indexPath(), func(w *bufio.Writer) {
+	return c.a.writeFile(c.indexPath(), func(w *bufio.Writer) error {
 		for _, r := range c.rows {
 			w.WriteString(formatRow(r))
 		}
+		return nil
 	})
 }
 
@@ -834,29 +955,12 @@ func appendFile(path, s string) error {
 	return f.Close()
 }
 
-func writeFileAtomic(path string, data []byte) error {
-	return writeAtomic(path, func(w *bufio.Writer) { w.Write(data) })
+// writeFile replaces path atomically, with its temp file in .wacli/tmp so a
+// crash can't leave one in a chat folder.
+func (a *Archive) writeFile(path string, fill func(w *bufio.Writer) error) error {
+	return fsutil.WriteAtomic(path, a.TmpDir(), 0o600, fill)
 }
 
-// writeAtomic writes a file through a temp file and a rename, so readers
-// never see it half written.
-func writeAtomic(path string, fill func(w *bufio.Writer)) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	w := bufio.NewWriterSize(tmp, 256*1024)
-	fill(w)
-	err = w.Flush()
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
+// TmpDir is where wacli keeps temp files: inside the archive, so renames
+// into place stay on one filesystem.
+func (a *Archive) TmpDir() string { return a.metaPath("tmp") }

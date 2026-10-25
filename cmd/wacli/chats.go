@@ -203,7 +203,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			if sp, err := defaultSkillPaths(); err == nil {
 				info["agent_skill"] = string(sp.state())
-				if st := sp.state(); st != skillCurrent {
+				if st := sp.state(); st != skillCurrent && st != skillNewer {
 					problems = append(problems, "agent skill "+string(st)+": run `wacli skill install`")
 				}
 			}

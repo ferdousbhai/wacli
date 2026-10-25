@@ -48,7 +48,7 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 }
 
 // doImport needs no connection, only the archive.
-func doImport(_ context.Context, ar *archive.Archive, r request) (any, error) {
+func doImport(ctx context.Context, ar *archive.Archive, r request) (any, error) {
 	dir := r.File
 	if strings.EqualFold(filepath.Ext(r.File), ".zip") {
 		tmp, err := os.MkdirTemp("", "wacli-import-")
@@ -78,7 +78,7 @@ func doImport(_ context.Context, ar *archive.Archive, r request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.Merge(entries, dir)
+	res, err := c.Merge(ctx, entries, dir)
 	if err != nil {
 		return nil, err
 	}
