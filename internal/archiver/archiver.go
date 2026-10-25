@@ -294,8 +294,18 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.applyDelete(ctx, b, c, pm, row)
 		return
 	case pm.Edited && c.Has(pm.ID):
+		if !pm.HasContent() {
+			if pm.UnhandledPayload != "" {
+				a.unrendered(pm.UnhandledPayload)
+			}
+			return // an edit wacli can't read mustn't blank the message
+		}
 		edit := a.entryFor(ctx, pm, "") // a document's caption and label, as when sent
+		queued := a.media.name(c.JID(), pm.ID)
 		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
+			if e.DocLabel == "" && e.Omitted == "document omitted" {
+				splitDocLabel(e, queued) // read back, the label is still in the text
+			}
 			if e.DocLabel != "" {
 				edit.DocLabel = e.DocLabel // the file's label doesn't change
 			}
@@ -434,7 +444,7 @@ func (a *Archiver) entryFor(ctx context.Context, pm wa.ParsedMessage, sender str
 			lines = append(lines, "OPTION: "+opt)
 		}
 		e.Text = strings.Join(lines, "\n‎")
-	case strings.HasPrefix(pm.Text, "[Album"):
+	case pm.IsAlbum:
 		e.Text = "" // iOS shows an album header as an empty message
 	}
 	return e
@@ -585,5 +595,17 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 		if err := a.media.placeOwn(chat, string(id), data); err != nil {
 			a.logf("warning: archiving the sent file (it will be downloaded instead): %v", err)
 		}
+	}
+}
+
+// splitDocLabel separates an omitted document's "name • ‎N pages" label
+// from its caption, by the queued file's name.
+func splitDocLabel(e *archive.Entry, file string) {
+	if _, name, ok := strings.Cut(file, "-"); ok {
+		file = name
+	}
+	file = strings.TrimSuffix(file, filepath.Ext(file))
+	if j := strings.LastIndex(e.Text, file); file != "" && j >= 0 {
+		e.Text, e.DocLabel = strings.TrimSuffix(e.Text[:j], " "), e.Text[j:]
 	}
 }

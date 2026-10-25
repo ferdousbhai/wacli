@@ -426,6 +426,16 @@ func (q *mediaQueue) placeOwn(chat, id string, data []byte) (err error) {
 }
 
 // queued reports whether a download for this message is queued or running.
+// name is the file name a queued download will get, or "".
+func (q *mediaQueue) name(chat, id string) string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if p, ok := q.items[chat+"|"+id]; ok {
+		return p.Name
+	}
+	return ""
+}
+
 func (q *mediaQueue) queued(chat, id string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()

@@ -339,14 +339,17 @@ func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupI
 	return cli.GetGroupInfo(ctx, jid)
 }
 
-func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client) {
+// sendInitialAvailablePresence reports whether it sent the presence.
+func sendInitialAvailablePresence(ctx context.Context, cli *whatsmeow.Client) bool {
 	// Whatsmeow recommends this once after connect so the server records the linked-device pushname.
 	if cli == nil || cli.Store == nil || strings.TrimSpace(cli.Store.PushName) == "" {
-		return
+		return false
 	}
 	if err := cli.SendPresence(ctx, types.PresenceAvailable); err != nil {
 		fmt.Fprintf(os.Stderr, "warn: failed to send initial available presence: %v\n", err)
+		return false
 	}
+	return true
 }
 
 func (c *Client) Logout(ctx context.Context) error {

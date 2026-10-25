@@ -191,8 +191,8 @@ func TestParseLiveMessageExtractsAlbumMessage(t *testing.T) {
 			ExpectedVideoCount: proto.Uint32(1),
 		},
 	}))
-	if pm.Text != "[Album: 3 images, 1 videos]" {
-		t.Fatalf("expected album text, got %q", pm.Text)
+	if !pm.IsAlbum || pm.Text != "" {
+		t.Fatalf("expected an album header, got %+v", pm)
 	}
 	if pm.UnhandledPayload != "" {
 		t.Fatalf("expected no unhandled payload, got %q", pm.UnhandledPayload)

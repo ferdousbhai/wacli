@@ -1,7 +1,6 @@
 package wa
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -55,6 +54,7 @@ type ParsedMessage struct {
 	Poll          *Poll
 	IsPollVote    bool // a vote on a poll, not shown in exports
 	IsPollAdd     bool // an option added to a poll, not shown in exports
+	IsAlbum       bool // an album header: shown as an empty message
 	PushName      string
 	MentionedJIDs []string
 	ReactionToID  string
@@ -124,6 +124,7 @@ func (pm ParsedMessage) HasContent() bool {
 		pm.Poll != nil ||
 		pm.IsPollVote ||
 		pm.IsPollAdd ||
+		pm.IsAlbum ||
 		pm.Call != nil ||
 		pm.Location != nil ||
 		pm.Revoked ||
@@ -376,28 +377,29 @@ func extractAlbum(m *waProto.Message, pm *ParsedMessage) {
 	if album == nil {
 		return
 	}
-	if pm.Text == "" {
-		imgs := album.GetExpectedImageCount()
-		vids := album.GetExpectedVideoCount()
-		switch {
-		case imgs > 0 && vids > 0:
-			pm.Text = fmt.Sprintf("[Album: %d images, %d videos]", imgs, vids)
-		case imgs > 0:
-			pm.Text = fmt.Sprintf("[Album: %d images]", imgs)
-		case vids > 0:
-			pm.Text = fmt.Sprintf("[Album: %d videos]", vids)
-		default:
-			pm.Text = "[Album]"
-		}
-	}
+	pm.IsAlbum = true // its photos and videos follow as messages of their own
 }
 
 // These envelopes retain the outer identity while carrying ordinary content.
+// whatsmeow unwraps some of them for live messages, but not in history
+// syncs or inside edits.
 func contentWrapper(m *waProto.Message) *waProto.Message {
-	if inner := m.GetAssociatedChildMessage().GetMessage(); inner != nil {
-		return inner
+	for _, w := range []*waE2E.FutureProofMessage{
+		m.GetAssociatedChildMessage(),
+		m.GetGroupStatusMentionMessage(),
+		m.GetEphemeralMessage(),
+		m.GetViewOnceMessage(),
+		m.GetViewOnceMessageV2(),
+		m.GetViewOnceMessageV2Extension(),
+		m.GetDocumentWithCaptionMessage(),
+		m.GetBotInvokeMessage(),
+		m.GetLottieStickerMessage(),
+	} {
+		if inner := w.GetMessage(); inner != nil {
+			return inner
+		}
 	}
-	return m.GetGroupStatusMentionMessage().GetMessage()
+	return nil
 }
 
 func groupInviteText(invite *waE2E.GroupInviteMessage) string {

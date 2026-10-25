@@ -138,6 +138,12 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 			return results, err
 		}
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
+		if errors.Is(err, wa.ErrNotConnected) && s.waitLoggedIn(ctx) == nil {
+			// Dropped mid-chat and back: carry on from its saved cursor.
+			more, merr := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
+			more.Added, more.Requests = more.Added+res.Added, more.Requests+res.Requests
+			res, err = more, merr
+		}
 		results = append(results, res)
 		switch {
 		case err == nil || res.Requests > 1: // some page came back

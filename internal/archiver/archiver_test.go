@@ -594,3 +594,46 @@ func TestMediaGivesUpAfterThreeTriesAndKeepsItsScheduleAcrossRestarts(t *testing
 		t.Errorf("still queued after three tries")
 	}
 }
+
+func edit(id string, m *waE2E.Message) *waE2E.Message {
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		Key:           &waCommon.MessageKey{RemoteJID: proto.String(group), ID: proto.String(id)},
+		EditedMessage: m,
+	}}
+}
+
+func TestCaptionEditOfAnOmittedDocumentKeepsItsLabel(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	doc := &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+		FileName: proto.String("Invoice.pdf"), PageCount: proto.Uint32(4), Caption: proto.String("first"),
+		DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32), FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32),
+	}}
+	a.handle(live(group, dana, "D1", false, t0, doc))
+	a.handle(live(group, dana, "E1", false, t0+5, edit("D1", text("second"))))
+	want := "‎[2025-10-24, 04:39:33] Dana Putri: second Invoice.pdf • ‎4 pages ‎document omitted ‎<This message was edited>\r\n"
+	if got := chatFile(t, ar, group); got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestUnreadableEditLeavesTheMessage(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	a.handle(live(group, dana, "M1", false, t0, text("hello")))
+	a.handle(live(group, dana, "E1", false, t0+5, edit("M1", &waE2E.Message{})))
+	if got := chatFile(t, ar, group); got != "[2025-10-24, 04:39:33] Dana Putri: hello\r\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestWrappedHistoryMessagesAndAlbumLikeText(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	wrapped := &waE2E.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: text("disappearing")}}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya",
+		web(group, "H1", dana, false, t0, wrapped)))
+	a.handle(live(group, dana, "M2", false, t0+5, text("[Album of the year] is out")))
+	got := chatFile(t, ar, group)
+	if !strings.Contains(got, "Dana Putri: disappearing\r\n") || !strings.Contains(got, "[Album of the year] is out") {
+		t.Errorf("got %q", got)
+	}
+}

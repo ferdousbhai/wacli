@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"sync"
+	"sync/atomic"
 
 	"github.com/ferdousbhai/wacli/internal/sqliteutil"
 	_ "github.com/mattn/go-sqlite3"
@@ -58,14 +58,18 @@ func (c *Client) init() (err error) {
 	c.client.UseRetryMessageStore = true
 	cli := c.client
 	guardAppStateKeys(deviceStore)
-	var presence sync.Once
+	var presenceSent atomic.Bool
 	cli.AddEventHandler(func(evt any) {
 		switch evt.(type) {
 		case *events.PairSuccess:
 			// Pairing's Device.Save replaced the stores.
 			guardAppStateKeys(cli.Store)
-		case *events.Connected:
-			presence.Do(func() { go sendInitialAvailablePresence(context.Background(), cli) })
+		case *events.Connected, *events.PushNameSetting:
+			// Once, when logged in and the push name is known (after a new
+			// link, it arrives later).
+			if !presenceSent.Load() {
+				go func() { presenceSent.Store(sendInitialAvailablePresence(context.Background(), cli)) }()
+			}
 		}
 	})
 	// Let whatsmeow own bounded primary-device retries and cancellation for

@@ -12,9 +12,6 @@ import (
 
 // Message kinds whose text the archive shows, parsed live and from history.
 func TestContentKindsYieldText(t *testing.T) {
-	album := func(i, v uint32) *waProto.Message {
-		return &waProto.Message{AlbumMessage: &waE2E.AlbumMessage{ExpectedImageCount: proto.Uint32(i), ExpectedVideoCount: proto.Uint32(v)}}
-	}
 	invite := func(caption, name string) *waProto.Message {
 		return &waProto.Message{GroupInviteMessage: &waE2E.GroupInviteMessage{Caption: proto.String(caption), GroupName: proto.String(name), GroupJID: proto.String("120363000001@g.us")}}
 	}
@@ -24,8 +21,9 @@ func TestContentKindsYieldText(t *testing.T) {
 		m    *waProto.Message
 		want string
 	}{
-		{"album", album(2, 3), "[Album: 2 images, 3 videos]"},
-		{"album empty", album(0, 0), "[Album]"},
+		{"ephemeral", &waProto.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: body}}, "searchable body"},
+		{"view once", &waProto.Message{ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: body}}, "searchable body"},
+		{"document with caption", &waProto.Message{DocumentWithCaptionMessage: &waE2E.FutureProofMessage{Message: body}}, "searchable body"},
 		{"invite caption", invite("join us", "Readers"), "join us"},
 		{"invite name", invite("", "Readers"), "Group invite: Readers"},
 		{"associated child", &waProto.Message{AssociatedChildMessage: &waE2E.FutureProofMessage{Message: body}}, "searchable body"},
