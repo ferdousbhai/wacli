@@ -17,11 +17,12 @@ build:
 install:
 	GOBIN=$(HOME)/.local/bin $(GO) install ./cmd/wacli
 
-## test: unit tests (race detector), Windows build of the cgo-free packages,
-## and the readable error for builds without cgo
+## test: unit tests (race detector), Windows and 32-bit builds of the
+## cgo-free packages, and the readable error for builds without cgo
 test:
 	$(GO) test -race ./...
 	CGO_ENABLED=0 GOOS=windows $(GO) vet ./internal/archive ./internal/lock ./internal/delegate
+	CGO_ENABLED=0 GOARCH=arm $(GO) vet ./internal/... ./skills/...
 	CGO_ENABLED=0 $(GO) build -o /dev/null ./cmd/wacli 2>&1 | grep -q wacli_requires_cgo_enabled_1_for_go_sqlite3
 
 ## lint: formatting, vet, unreachable code, known vulnerabilities

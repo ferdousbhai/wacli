@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -795,5 +796,40 @@ func TestRealignAfterCrashInLargeBatch(t *testing.T) {
 		if r.ID != fmt.Sprintf("old%d", i) {
 			t.Errorf("entry %d got %s", i, r.ID)
 		}
+	}
+}
+
+// Entries written in another zone, with index-only rows from a crash spread
+// through a long chat: every entry keeps its own ID except unavoidable
+// same-second ties, and none is left without one.
+func TestRealignZoneShiftWithIndexOnlyRows(t *testing.T) {
+	wrote, _ := time.LoadLocation("Asia/Jakarta") // UTC+7
+	now, _ := time.LoadLocation("Asia/Dhaka")     // UTC+6
+	r := rand.New(rand.NewSource(1))
+	var rows []Row
+	var entries, truth []string
+	ts := int64(1_700_000_000)
+	for i := range 5000 {
+		ts += int64(r.Intn(40))
+		id := fmt.Sprintf("m%d", i)
+		rows = append(rows, Row{ID: id, TS: ts})
+		if i > 0 && i%10 == 0 {
+			continue // index-only row
+		}
+		entries = append(entries, Render(Entry{Time: time.Unix(ts, 0).In(wrote), Sender: "Dana", Text: "x"}, DefaultDateFormat))
+		truth = append(truth, id)
+	}
+	wrong, repaired := 0, 0
+	for i, g := range realign(entries, rows, DefaultDateFormat, now) {
+		switch {
+		case g.ID == truth[i]:
+		case strings.HasPrefix(g.ID, "repair:"):
+			repaired++
+		default:
+			wrong++
+		}
+	}
+	if repaired != 0 || wrong > 25 {
+		t.Errorf("wrong IDs %d, repair IDs %d (of %d)", wrong, repaired, len(entries))
 	}
 }

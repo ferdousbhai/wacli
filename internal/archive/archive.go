@@ -522,16 +522,18 @@ func (c *Chat) reconcile() error {
 	return nil
 }
 
-// realign pairs each entry with its index row. Both are in time order, so a
-// row matches the next entry with the same timestamp. Entries are rendered in
-// whatever zone the computer had when they were written, so a row may also
-// match at an offset of whole 15-minute steps (zone offsets are multiples of
-// 15 minutes), but only the offset the previous pair matched at: anything
-// else would hand one message another's ID. Entries without a row get one
-// WhatsApp won't recognize; they can no longer be edited or deleted, but the
-// chat keeps working.
+// realign pairs each entry with its index row. Both are in time order, so
+// each entry takes the nearest following row at the same instant, or at the
+// zone shift the previous pair matched at: entries are rendered in whatever
+// zone the computer had when they were written. Until a pair has set that
+// shift, a row a whole number of 15-minute steps away (zone offsets are
+// multiples of 15 minutes, at most 26 hours apart) also counts, close by.
+// Rows without entries (a crash between writing the index and _chat.txt) can
+// come in a run as long as a history batch, so the search reaches past them.
+// Entries without a row get one WhatsApp won't recognize; they can no longer
+// be edited or deleted, but the chat keeps working.
 func realign(entries []string, rows []Row, dateFormat string, loc *time.Location) []Row {
-	const block = 15 * 60
+	const block, maxShift = 15 * 60, 26 * 3600
 	out := make([]Row, len(entries))
 	next := 0
 	var lastTS int64
@@ -542,20 +544,16 @@ func realign(entries []string, rows []Row, dateFormat string, loc *time.Location
 			ts = e.Time.Unix()
 		}
 		lastTS = ts
-		match := -1
 		end := min(len(rows), next+64)
-		// The same instant. Rows written without their entries (a crash
-		// between the index and _chat.txt) can come in a run as long as a
-		// whole history batch, so this search reaches past all of them.
 		wide := min(len(rows), end+max(0, len(rows)-len(entries)))
+		match := -1
 		for k := next; k < wide && match < 0; k++ {
-			if rows[k].TS == ts {
+			if d := rows[k].TS - ts; d == 0 || (known && d == offset) {
 				match = k
 			}
 		}
-		for k := next; k < end && match < 0; k++ { // the same shift as before
-			d := rows[k].TS - ts
-			if d%block == 0 && (!known || d == offset) {
+		for k := next; k < end && match < 0 && !known; k++ {
+			if d := rows[k].TS - ts; d%block == 0 && d >= -maxShift && d <= maxShift {
 				match = k
 			}
 		}

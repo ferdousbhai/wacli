@@ -90,7 +90,7 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 			return 0, err
 		}
 		if info.Size() > MaxMediaDownloadSize {
-			return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+			return 0, fmt.Errorf("media too large; maximum download size is %d bytes", int64(MaxMediaDownloadSize))
 		}
 		return info.Size(), nil
 	})
@@ -281,7 +281,7 @@ func downloadDirect(ctx context.Context, mediaURL string, w io.Writer) (int64, e
 		return n, err
 	}
 	if n > limit {
-		return n, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+		return n, fmt.Errorf("media too large; maximum download size is %d bytes", int64(MaxMediaDownloadSize))
 	}
 	return n, nil
 }
@@ -355,7 +355,7 @@ func (f *limitedDownloadFile) limitError() error {
 
 func mediaDownloadLength(fileLength uint64) (int, error) {
 	if fileLength > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large (%d bytes); maximum download size is %d bytes", fileLength, MaxMediaDownloadSize)
+		return 0, fmt.Errorf("media too large (%d bytes); maximum download size is %d bytes", fileLength, int64(MaxMediaDownloadSize))
 	}
 	if fileLength > 0 {
 		return int(fileLength), nil
