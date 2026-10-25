@@ -40,7 +40,8 @@ type pendingMedia struct {
 	Length    uint64    `json:"length"`
 	Attempts  int       `json:"attempts"`
 	NextTry   time.Time `json:"next_try"`
-	Gone      bool      `json:"gone,omitempty"` // phone no longer has it
+	Gone      bool      `json:"gone,omitempty"`    // phone no longer has it
+	GaveUp    bool      `json:"gave_up,omitempty"` // kept, never tried again: a redelivery mustn't requeue it
 }
 
 func (p pendingMedia) key() string { return p.Chat + "|" + p.ID }
@@ -97,8 +98,8 @@ func newMediaQueue(a *Archiver) (*mediaQueue, error) {
 			list = nil
 		}
 		for _, p := range list {
-			if p.Gone {
-				continue // from versions that kept these
+			if p.Gone && !p.GaveUp {
+				p.GaveUp, p.NextTry = true, never // from versions that kept these
 			}
 			q.items[p.key()] = p // NextTry kept: a restart doesn't ask the phone again early
 		}
@@ -127,11 +128,21 @@ func (q *mediaQueue) forget(chat, id string) {
 	q.mu.Unlock()
 }
 
+// len counts the attachments still to download.
 func (q *mediaQueue) len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.items)
+	n := 0
+	for _, p := range q.items {
+		if !p.GaveUp {
+			n++
+		}
+	}
+	return n
 }
+
+// never is the NextTry of an item given up on.
+var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func (q *mediaQueue) poke() {
 	select {
@@ -482,10 +493,10 @@ func (q *mediaQueue) failed(p *pendingMedia, err error, askedPhone bool) {
 	case p.Gone:
 		// The entry stays "… omitted", as in an export without that file.
 		q.a.logf("media no longer on the phone, giving up: %s", p.Name)
-		delete(q.items, p.key())
+		cur.GaveUp, cur.NextTry = true, never
 	case cur.Attempts > len(retryAfter):
 		q.a.logf("media download failed %d times (%v), giving up: %s", cur.Attempts, err, p.Name)
-		delete(q.items, p.key())
+		cur.GaveUp, cur.NextTry = true, never
 	default:
 		cur.NextTry = time.Now().Add(retryAfter[cur.Attempts-1])
 		if cur.Attempts == 1 {

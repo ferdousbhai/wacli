@@ -59,7 +59,7 @@ func (a *Archiver) RefreshNames(ctx context.Context, all bool) {
 		if err != nil {
 			continue
 		}
-		_, suffix := chatKind(jid)
+		_, suffix := chatKind(a.canonical(ctx, jid)) // a hidden-ID chat's number, once known
 		name := info.Name
 		if IsFallbackName(name, info.JID) {
 			if n := archive.CleanName(a.names.chat(ctx, jid, "")); !IsFallbackName(n, info.JID) || numberFor(n, name, info.JID) {

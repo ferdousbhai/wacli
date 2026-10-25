@@ -865,3 +865,20 @@ func TestHiddenIDSenderWithOnlyANumberStaysFlagged(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestGivenUpMediaIsNotRequeuedByARedelivery(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	img := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+		DirectPath: proto.String("/v/x"), MediaKey: make([]byte, 32),
+		FileSHA256: make([]byte, 32), FileEncSHA256: make([]byte, 32), FileLength: proto.Uint64(10),
+	}}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, group, "Maya", web(group, "M1", dana, false, t0, img)))
+	for _, p := range a.media.items {
+		p.Gone = true
+		a.media.failed(p, fmt.Errorf("gone"), true)
+	}
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, group, "Maya", web(group, "M1", dana, false, t0, img)))
+	if n := a.media.len(); n != 0 {
+		t.Errorf("given-up media queued again: %d", n)
+	}
+}

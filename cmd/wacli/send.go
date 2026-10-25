@@ -167,8 +167,8 @@ func optional(s string) *string {
 }
 
 // resolveChat accepts a phone number, a JID, or the name of an archived chat.
-// resolveChat finds the archived chat to names. lidOf, when given, maps a
-// number to the hidden ID a chat may still be archived under.
+// lidOf, when given, maps a number to the hidden ID a chat may still be
+// archived under.
 func resolveChat(ar *archive.Archive, to string, lidOf func(types.JID) types.JID) (types.JID, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
