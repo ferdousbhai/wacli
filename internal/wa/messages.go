@@ -243,23 +243,16 @@ func extractProtocolMutation(m *waProto.Message, pm *ParsedMessage) (*waProto.Me
 	}
 }
 
+// applyProtocolKey points an edit or revoke at the message it changes. The
+// key is written from the sender's side (in a DM RemoteJID is the recipient,
+// and FromMe means "the sender's own message"), so only its ID is used; the
+// chat and sender come from the envelope.
 func applyProtocolKey(key *waProto.MessageKey, pm *ParsedMessage) {
 	if key == nil || pm == nil {
 		return
 	}
 	if id := strings.TrimSpace(key.GetID()); id != "" {
 		pm.ID = id
-	}
-	if remote := strings.TrimSpace(key.GetRemoteJID()); remote != "" {
-		if chat, err := types.ParseJID(remote); err == nil {
-			pm.Chat = chat
-		}
-	}
-	if participant := strings.TrimSpace(key.GetParticipant()); participant != "" {
-		pm.SenderJID = participant
-	}
-	if key.FromMe != nil {
-		pm.FromMe = key.GetFromMe()
 	}
 }
 

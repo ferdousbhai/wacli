@@ -138,9 +138,9 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 			return results, err
 		}
 		res, err := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
-		if errors.Is(err, wa.ErrNotConnected) && s.waitLoggedIn(ctx) == nil {
+		if left := r.Requests - (res.Requests - 1); errors.Is(err, wa.ErrNotConnected) && left > 0 && s.waitLoggedIn(ctx) == nil {
 			// Dropped mid-chat and back: carry on from its saved cursor.
-			more, merr := s.arc.Backfill(ctx, jid, r.Count, r.Requests, r.Wait)
+			more, merr := s.arc.Backfill(ctx, jid, r.Count, left, r.Wait)
 			more.Added, more.Requests = more.Added+res.Added, more.Requests+res.Requests-1 // that one wasn't sent
 			res, err = more, merr
 		}

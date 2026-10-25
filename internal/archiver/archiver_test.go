@@ -163,18 +163,30 @@ func TestEditAndDeleteRewriteTheEntry(t *testing.T) {
 	a.handle(live(dana, dana, "M1", false, t0, text("Thanks")))
 	a.handle(live(dana, dana, "M2", false, t0+10, text("wrong chat")))
 	a.handle(live(dana, dana, "E1", false, t0+20, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
-		Type:          waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
-		Key:           &waCommon.MessageKey{RemoteJID: proto.String(dana), ID: proto.String("M1")},
+		Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		// Keys are from the sender's side: in a DM, RemoteJID is the recipient.
+		Key:           &waCommon.MessageKey{RemoteJID: proto.String(me), FromMe: proto.Bool(true), ID: proto.String("M1")},
 		EditedMessage: text("Thank u Alex"),
 	}}))
 	a.handle(live(dana, dana, "R1", false, t0+30, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
 		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
-		Key:  &waCommon.MessageKey{RemoteJID: proto.String(dana), ID: proto.String("M2")},
+		Key:  &waCommon.MessageKey{RemoteJID: proto.String(me), FromMe: proto.Bool(true), ID: proto.String("M2")},
 	}}))
 	want := "[2025-10-24, 04:39:33] Dana Putri: Thank u Alex ‎<This message was edited>\r\n" +
 		"[2025-10-24, 04:39:43] Dana Putri: ‎This message was deleted.\r\n"
 	if got := chatFile(t, ar, dana); got != want {
 		t.Errorf("got %q\nwant %q", got, want)
+	}
+	a.handle(live(group, dana, "G1", false, t0, text("oops")))
+	a.handle(live(group, dana, "GR", false, t0+30, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
+		Key:  &waCommon.MessageKey{RemoteJID: proto.String(group), FromMe: proto.Bool(true), ID: proto.String("G1")},
+	}}))
+	if got := chatFile(t, ar, group); !strings.HasSuffix(got, "Dana Putri: ‎This message was deleted.\r\n") {
+		t.Errorf("group: %q", got)
+	}
+	if len(ar.Chats()) != 2 {
+		t.Errorf("chats: %+v", ar.Chats()) // no self-chat from the keys
 	}
 }
 
