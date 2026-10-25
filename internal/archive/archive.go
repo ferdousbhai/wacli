@@ -938,6 +938,11 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 // append can't leave the index and _chat.txt out of step.
 func (c *Chat) appendLocked(row Row, text string) error {
 	err := appendFile(c.indexPath(), formatRow(row))
+	if err == nil && len(c.entries) > 0 && !exists(c.chatPath()) {
+		// _chat.txt was deleted under us: never start a one-line file under
+		// the rows of earlier entries; the rewrite below restores it.
+		err = os.ErrNotExist
+	}
 	if err == nil {
 		err = appendFile(c.chatPath(), text+EntrySep)
 	}

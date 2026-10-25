@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -181,9 +180,6 @@ func (c *Chat) importFile(id, name, srcDir string, move bool) (bool, error) {
 	if !move {
 		// Never move the user's own files: copy them to the temp folder.
 		in, err := os.Open(src)
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
 		if err != nil {
 			return false, err
 		}
@@ -202,8 +198,6 @@ func (c *Chat) importFile(id, name, srcDir string, move bool) (bool, error) {
 			return false, err
 		}
 		src = tmp.Name()
-	} else if !exists(src) {
-		return false, nil
 	}
 	if _, err := c.PlaceAttachment(id, src, base); err != nil {
 		if !move {

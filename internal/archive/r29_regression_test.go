@@ -74,3 +74,16 @@ func TestDeletedMediaLeavesDespiteQuotingText(t *testing.T) {
 		t.Errorf("deleted photo still in the chat folder; DeletedMedia=%v", c.info.DeletedMedia)
 	}
 }
+func TestChatFileDeletedWhileRunningIsRecreated(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 1}, text("one"))
+	os.Remove(filepath.Join(c.Dir(), ChatFile))
+	if _, _, err := c.Insert(Row{ID: "B", TS: 2}, text("two")); err != nil {
+		t.Fatal(err)
+	}
+	want := "[1970-01-01, 00:00:01] Dana: one\r\n[1970-01-01, 00:00:02] Dana: two\r\n"
+	if got := chatText(t, c); got != want {
+		t.Errorf("got %q", got)
+	}
+}
