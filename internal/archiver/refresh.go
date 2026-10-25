@@ -132,7 +132,8 @@ func (a *Archiver) refreshSenders(ctx context.Context, chatJID string, resolved 
 			resolved[row.Sender] = name
 		}
 		if numberFor(name, sender, row.Sender) {
-			return name, true // a number beats a hidden ID's digits, though still no name
+			left++ // a number beats a hidden ID's digits, but is still no name
+			return name, true
 		}
 		if name == "" || IsFallbackName(strings.TrimPrefix(name, pushPrefix), row.Sender) {
 			left++

@@ -175,7 +175,17 @@ func resolveChat(ar *archive.Archive, to string, lidOf func(types.JID) types.JID
 		return types.JID{}, fmt.Errorf("recipient is required")
 	}
 	if strings.Contains(to, "@") {
-		return types.ParseJID(to)
+		jid, err := types.ParseJID(to)
+		if err == nil && lidOf != nil && jid.Server == types.DefaultUserServer {
+			if _, ok := ar.Info(jid.String()); !ok {
+				if lid := lidOf(jid); lid != jid {
+					if _, ok := ar.Info(lid.String()); ok {
+						return lid, nil
+					}
+				}
+			}
+		}
+		return jid, err
 	}
 	digits := strings.Map(func(r rune) rune {
 		if r >= '0' && r <= '9' {

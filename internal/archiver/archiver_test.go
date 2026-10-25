@@ -852,3 +852,16 @@ func TestHiddenIDChatGetsItsNumberOnceKnown(t *testing.T) {
 		t.Errorf("name %q, file %q", info.Name, chatFile(t, ar, lid))
 	}
 }
+
+func TestHiddenIDSenderWithOnlyANumberStaysFlagged(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	lid := "99887766554433@lid"
+	a.handle(live(group, lid, "G1", false, t0, text("hi")))
+	a.wa.StoreLIDMapping(context.Background(), lid, "6285555555555@s.whatsapp.net")
+	a.RefreshNames(context.Background(), false)
+	a.names.notePush(lid, "Rina")
+	a.RefreshNames(context.Background(), false)
+	if got := chatFile(t, ar, group); !strings.Contains(got, "Rina: hi") {
+		t.Errorf("got %q", got)
+	}
+}
