@@ -168,12 +168,18 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	if chosen != "" {
 		a.opts.DateFormat = chosen
 	}
-	for _, first := range firsts { // written before formats were recorded
-		if _, err := Parse(first, a.opts.DateFormat, a.opts.Location); err != nil {
-			a.probMu.Lock()
-			a.problems = append(a.problems, fmt.Sprintf("existing lines don't read with --date-format %q (%v): stop the sync, run `wacli --date-format '<their format>' sync` once to record theirs, and start the sync again", a.opts.DateFormat, err))
-			a.probMu.Unlock()
-			return nil
+	var unread []string // written before formats were recorded, in another
+	for _, first := range firsts {
+		if _, err := Parse(first.text, a.opts.DateFormat, a.opts.Location); err != nil {
+			unread = append(unread, first.folder)
+		}
+	}
+	if len(unread) > 0 {
+		a.probMu.Lock()
+		a.problems = append(a.problems, fmt.Sprintf("%d chats (%s) don't read with --date-format %q: run `wacli --date-format '<the format most chats use>' sync` once with the sync stopped to record it", len(unread), strings.Join(unread[:min(3, len(unread))], ", "), a.opts.DateFormat))
+		a.probMu.Unlock()
+		if chosen == "" || len(unread) == len(firsts) {
+			return nil // a choice made for this archive records anyway
 		}
 	}
 	if a.opts.ReadOnly || stored == a.opts.DateFormat {
@@ -203,15 +209,17 @@ func ValidDateFormat(layout string) error {
 	return nil
 }
 
+type firstLine struct{ folder, text string }
+
 // firstEntries is each chat's first line (by folder name), or with one only
 // the first chat's: enough to know lines exist.
-func (a *Archive) firstEntries(one bool) []string {
+func (a *Archive) firstEntries(one bool) []firstLine {
 	folders := make([]string, 0, len(a.meta))
 	for _, info := range a.meta {
 		folders = append(folders, info.Folder)
 	}
 	sort.Strings(folders)
-	var out []string
+	var out []firstLine
 	for _, folder := range folders {
 		data, err := os.ReadFile(filepath.Join(a.path(folder), ChatFile))
 		if err != nil {
@@ -219,7 +227,7 @@ func (a *Archive) firstEntries(one bool) []string {
 		}
 		for _, e := range SplitEntries(string(data)) {
 			if headerRE.MatchString(e) {
-				out = append(out, e)
+				out = append(out, firstLine{folder, e})
 				break
 			}
 		}
@@ -990,7 +998,8 @@ func (c *Chat) Get(id string) (Entry, bool) {
 // name, so a name holding ": " isn't cut at its colon (see SetSenderNames).
 func (c *Chat) parseLocked(id, text string) (Entry, error) {
 	sender := ""
-	if name := c.a.senderName; name != nil {
+	// Only a line with a second ": " can hold a name with one.
+	if name := c.a.senderName; name != nil && strings.Count(text, ": ") > 1 {
 		if i, ok := c.byID[id]; ok {
 			sender = name(c.info.JID, c.rows[i])
 		} else if i, ok := c.pendingByID[id]; ok {

@@ -18,6 +18,7 @@ import (
 // doctor` (and a person checking on a service) can see what it is doing.
 type Status struct {
 	PID           int       `json:"pid"`
+	PIDNamespace  string    `json:"pid_namespace,omitempty"` // see PIDNamespace
 	StartedAt     time.Time `json:"started_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	Connected     bool      `json:"connected"`
@@ -64,8 +65,16 @@ type Halt struct {
 	Retry  bool
 }
 
+// PIDNamespace names this process's PID namespace ("" where there's none
+// to tell). Another one (a sandbox, a container) can't see the sync's lock
+// or process, so doctor goes by its status instead.
+func PIDNamespace() string {
+	ns, _ := os.Readlink("/proc/self/ns/pid")
+	return ns
+}
+
 func newStatusTracker(archiveRoot string) *statusTracker {
-	s := Status{PID: os.Getpid(), StartedAt: time.Now()}
+	s := Status{PID: os.Getpid(), PIDNamespace: PIDNamespace(), StartedAt: time.Now()}
 	// Why the last sync stopped stays on show until a connection succeeds.
 	if old, err := ReadStatus(archiveRoot); err == nil {
 		s.LoggedOut, s.LoggedOutAt, s.Halted, s.HaltedAt = old.LoggedOut, old.LoggedOutAt, old.Halted, old.HaltedAt

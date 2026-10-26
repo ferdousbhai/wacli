@@ -217,7 +217,15 @@ func TestUnrecordedCheckReadsEveryChat(t *testing.T) {
 	os.WriteFile(filepath.Join(z.Dir(), ChatFile), []byte("[1/1/70, 12:00:10 AM] Zed: hi\r\n"), 0o600)
 	os.Remove(filepath.Join(root, metaDir, formatFile))
 	b, err := Open(Options{Root: root, Location: time.UTC})
-	if err != nil || len(b.Problems()) != 1 {
+	if err != nil || len(b.Problems()) != 1 || !strings.Contains(b.Problems()[0], "Zed") {
 		t.Fatalf("the later chat's format wasn't checked: %v %v", err, b.Problems())
+	}
+	if _, err := os.Stat(filepath.Join(root, metaDir, formatFile)); err == nil {
+		t.Fatal("recorded with no format chosen")
+	}
+	// A format chosen for this archive (most chats read with it) is recorded.
+	Open(Options{Root: root, DateFormat: DefaultDateFormat, Location: time.UTC})
+	if data, _ := os.ReadFile(filepath.Join(root, metaDir, formatFile)); strings.TrimSpace(string(data)) != DefaultDateFormat {
+		t.Fatalf("recorded %q", data)
 	}
 }

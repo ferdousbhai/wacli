@@ -105,7 +105,7 @@ func TestStatusSaysWhenTheSyncStopped(t *testing.T) {
 	done := make(chan struct{})
 	go func() { a.reportStatus(ctx); close(done) }()
 	time.Sleep(50 * time.Millisecond)
-	if st, err := ReadStatus(ar.Root()); err != nil || st.Stopped {
+	if st, err := ReadStatus(ar.Root()); err != nil || st.Stopped || st.PIDNamespace == "" || st.PIDNamespace != PIDNamespace() {
 		t.Fatalf("running: %+v %v", st, err)
 	}
 	cancel()
