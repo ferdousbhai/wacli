@@ -145,10 +145,10 @@ var ErrNoAnswer = errors.New("phone did not answer the history request (is it on
 
 // deliverBackfill hands a page to the backfill of its chat, unless the page
 // names another request (a refetch's, or an earlier one of this backfill).
-func (a *Archiver) deliverBackfill(ctx context.Context, chatID, session string, batch historyBatch) {
+func (a *Archiver) deliverBackfill(ctx context.Context, chatID, session string, batch historyBatch) bool {
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
-		return
+		return false
 	}
 	key := a.chatKey(ctx, jid).String()
 	a.mu.Lock()
@@ -163,4 +163,5 @@ func (a *Archiver) deliverBackfill(ctx context.Context, chatID, session string, 
 	if ch != nil {
 		ch <- batch
 	}
+	return running
 }

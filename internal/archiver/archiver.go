@@ -337,7 +337,12 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 			if jid, err := types.ParseJID(chatID); err == nil && a.deliverRefetch(session, a.chatKey(ctx, jid).String(), page) {
 				continue
 			}
-			a.deliverBackfill(ctx, chatID, session, page)
+			if !a.deliverBackfill(ctx, chatID, session, page) {
+				// Nothing asked for it, or the phone names requests in a way
+				// wacli doesn't match: the latter would stall backfill and
+				// refetch, so it shows here.
+				a.logf("note: on-demand history for %s (request %q) matched no waiting request", chatID, session)
+			}
 		}
 	}
 	if n := a.added.Load() - before; n > 0 {
