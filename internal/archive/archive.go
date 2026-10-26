@@ -157,7 +157,8 @@ func (a *Archive) settleDateFormat(chosen string) error {
 		a.opts.DateFormat = stored
 		return nil
 	}
-	first, hasLines := a.firstEntry()
+	firsts := a.firstEntries(stored != "")
+	hasLines := len(firsts) > 0
 	if stored != "" && hasLines {
 		a.opts.DateFormat = stored
 		a.opts.Logf("note: using this archive's --date-format %q, not %q: its lines are written in it", stored, chosen)
@@ -167,7 +168,7 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	if chosen != "" {
 		a.opts.DateFormat = chosen
 	}
-	if hasLines { // written before formats were recorded
+	for _, first := range firsts { // written before formats were recorded
 		if _, err := Parse(first, a.opts.DateFormat, a.opts.Location); err != nil {
 			a.probMu.Lock()
 			a.problems = append(a.problems, fmt.Sprintf("existing lines don't read with --date-format %q (%v): stop the sync, run `wacli --date-format '<their format>' sync` once to record theirs, and start the sync again", a.opts.DateFormat, err))
@@ -202,13 +203,15 @@ func ValidDateFormat(layout string) error {
 	return nil
 }
 
-// firstEntry is the first chat line in the archive (by folder name), if any.
-func (a *Archive) firstEntry() (string, bool) {
+// firstEntries is each chat's first line (by folder name), or with one only
+// the first chat's: enough to know lines exist.
+func (a *Archive) firstEntries(one bool) []string {
 	folders := make([]string, 0, len(a.meta))
 	for _, info := range a.meta {
 		folders = append(folders, info.Folder)
 	}
 	sort.Strings(folders)
+	var out []string
 	for _, folder := range folders {
 		data, err := os.ReadFile(filepath.Join(a.path(folder), ChatFile))
 		if err != nil {
@@ -216,11 +219,15 @@ func (a *Archive) firstEntry() (string, bool) {
 		}
 		for _, e := range SplitEntries(string(data)) {
 			if headerRE.MatchString(e) {
-				return e, true
+				out = append(out, e)
+				break
 			}
 		}
+		if one && len(out) > 0 {
+			break
+		}
 	}
-	return "", false
+	return out
 }
 
 // shortenFolders gives a new folder to a chat whose name was too long for

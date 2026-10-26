@@ -204,3 +204,20 @@ func TestDownloadOfADeletedPhotoFromAColonNameGoesAside(t *testing.T) {
 		t.Fatal("a deleted photo landed in the chat folder")
 	}
 }
+
+// Before the record, every chat's first line is checked, not just one.
+func TestUnrecordedCheckReadsEveryChat(t *testing.T) {
+	root := t.TempDir()
+	a, _ := Open(Options{Root: root, Location: time.UTC})
+	for _, name := range []string{"Ana", "Zed"} {
+		c, _, _ := a.EnsureChat(name+"@s.whatsapp.net", name, "dm", "")
+		c.Insert(Row{ID: name, TS: 10}, text("hi"))
+	}
+	z, _ := a.Chat("Zed@s.whatsapp.net")
+	os.WriteFile(filepath.Join(z.Dir(), ChatFile), []byte("[1/1/70, 12:00:10 AM] Zed: hi\r\n"), 0o600)
+	os.Remove(filepath.Join(root, metaDir, formatFile))
+	b, err := Open(Options{Root: root, Location: time.UTC})
+	if err != nil || len(b.Problems()) != 1 {
+		t.Fatalf("the later chat's format wasn't checked: %v %v", err, b.Problems())
+	}
+}

@@ -269,7 +269,11 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			if !running {
 				// The lock can be out of sight (doctor in a sandbox or
 				// container); a sync reports status every 30s.
-				if st, err := archiver.ReadStatus(ar.Root()); err == nil && !st.Stopped && time.Since(st.UpdatedAt) < 90*time.Second {
+				// Only if its process is out of sight: one that's visible
+				// without the lock held has crashed.
+				st, err := archiver.ReadStatus(ar.Root())
+				_, visible := os.Stat(fmt.Sprintf("/proc/%d", st.PID))
+				if err == nil && !st.Stopped && time.Since(st.UpdatedAt) < 90*time.Second && visible != nil {
 					running = true
 				}
 			}
