@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -88,7 +89,7 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 	}
 	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp session (session.db)")
 	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the chat folders")
-	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", envOr("WACLI_DATE_FORMAT", archive.DefaultDateFormat), "Go time layout for entry timestamps, matching your phone's region")
+	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", os.Getenv("WACLI_DATE_FORMAT"), "Go time layout for entry timestamps, matching your phone's region; an archive keeps the one it was started with (default "+strconv.Quote(archive.DefaultDateFormat)+")")
 	root.PersistentFlags().BoolVar(&f.asJSON, "json", false, "print machine-readable JSON")
 
 	root.AddCommand(
@@ -149,11 +150,13 @@ func defaultArchiveDir() string {
 // openArchive opens the archive; readOnly for commands that may run next to
 // the sync process that owns the files.
 func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
-	if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
-		return nil, fmt.Errorf("--date-format: %w", err)
-	}
-	if time.Unix(1, 0).UTC().Format(f.dateFormat) == time.Unix(0, 0).UTC().Format(f.dateFormat) {
-		return nil, fmt.Errorf("--date-format %q has no seconds; iPhone exports always show them", f.dateFormat)
+	if f.dateFormat != "" { // "": the archive's own, or the default
+		if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
+			return nil, fmt.Errorf("--date-format: %w", err)
+		}
+		if time.Unix(1, 0).UTC().Format(f.dateFormat) == time.Unix(0, 0).UTC().Format(f.dateFormat) {
+			return nil, fmt.Errorf("--date-format %q has no seconds; iPhone exports always show them", f.dateFormat)
+		}
 	}
 	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local, Logf: logf, ReadOnly: readOnly})
 }

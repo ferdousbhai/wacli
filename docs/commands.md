@@ -2,8 +2,9 @@
 
 Global flags: `--archive` (`WACLI_ARCHIVE_DIR`, default `~/WhatsApp`), `--store`
 (`WACLI_STORE_DIR`, the session), `--date-format` (`WACLI_DATE_FORMAT`, a Go
-time layout matching your phone's region; the archive records the first one used
-and refuses another, as old lines couldn't be read back), `--json`.
+time layout matching your phone's region; set it before the first `auth`: the
+archive records the format its lines are written in and keeps using it, whatever
+a later command or the service is given), `--json`.
 
 One process owns the WhatsApp session at a time. While `sync --follow` runs,
 `send`, `backfill`, `refetch` and `import` hand their work to it; stopping the client
@@ -90,9 +91,9 @@ Merges an iPhone export (zip or folder) into the archived chat. Entries already
 there are matched by sender, time (within 2 seconds) and content; missing ones
 are added; attachments fill in entries that say `… omitted`. Importing the same
 export again changes nothing. The chat is found from the export's name; pass
-`--chat` when two chats share it. `--date-format` must match the export (while
-`sync --follow` runs, the import is done by it, with its `--date-format` and
-`--archive`). Times are matched in the computer's time zone, as the export
+`--chat` when two chats share it. The export is read in the archive's date
+format, so it must come from a phone in the same region settings (while `sync
+--follow` runs, the import is done by it, with its `--archive`). Times are matched in the computer's time zone, as the export
 wrote them in the phone's: if the two differ, stop the sync and run the import
 with `TZ` set to the phone's zone (e.g. `TZ=Asia/Makassar wacli import …`), or
 every line is added again.

@@ -96,32 +96,71 @@ func TestParseAsKeepsANameHoldingAColon(t *testing.T) {
 }
 
 func TestArchiveKeepsOneDateFormat(t *testing.T) {
+	const us = "1/2/06, 3:04:05 PM"
 	root := t.TempDir()
-	open := func(format string, readOnly bool) (*Archive, error) {
-		return Open(Options{Root: root, DateFormat: format, Location: time.UTC, ReadOnly: readOnly})
+	open := func(format string, readOnly bool) *Archive {
+		t.Helper()
+		a, err := Open(Options{Root: root, DateFormat: format, Location: time.UTC, ReadOnly: readOnly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
 	}
-	a, err := open("", false)
+	recorded := func() string {
+		data, _ := os.ReadFile(filepath.Join(root, metaDir, formatFile))
+		return strings.TrimSpace(string(data))
+	}
+	// No lines yet: the chosen format may still change.
+	open("", false)
+	if open(us, false); recorded() != us {
+		t.Fatalf("recorded %q", recorded())
+	}
+	a := open("", false)
+	if a.DateFormat() != us {
+		t.Fatalf("not the recorded one: %q", a.DateFormat())
+	}
+	c, _, _ := a.EnsureChat("62@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 10}, text("a"))
+	// Lines exist: another choice (a service without the shell's setting,
+	// say) is ignored, not refused.
+	for _, ro := range []bool{false, true} {
+		if b := open(DefaultDateFormat, ro); b.DateFormat() != us || len(b.Problems()) != 0 {
+			t.Fatalf("read-only %v: %q %v", ro, b.DateFormat(), b.Problems())
+		}
+	}
+	if recorded() != us {
+		t.Fatalf("record changed: %q", recorded())
+	}
+}
+
+// An archive from before formats were recorded: its lines decide, read
+// leniently (a byte-order mark, a stray first line), and a mismatch is
+// reported, never refused.
+func TestUnrecordedArchiveIsCheckedAgainstItsLines(t *testing.T) {
+	root := t.TempDir()
+	a, err := Open(Options{Root: root, Location: time.UTC})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c, _, _ := a.EnsureChat("62@s.whatsapp.net", "Dana", "dm", "")
 	c.Insert(Row{ID: "A", TS: 10}, text("a"))
-	const us = "1/2/06, 3:04:05 PM"
-	if _, err := open(us, false); err == nil || !strings.Contains(err.Error(), DefaultDateFormat) {
-		t.Fatalf("another format accepted: %v", err)
+	path := filepath.Join(c.Dir(), ChatFile)
+	data, _ := os.ReadFile(path)
+	os.WriteFile(path, append([]byte("\uFEFFnot a line\r\n"), data...), 0o600)
+	formatPath := filepath.Join(root, metaDir, formatFile)
+	os.Remove(formatPath)
+
+	b, err := Open(Options{Root: root, DateFormat: "1/2/06, 3:04:05 PM", Location: time.UTC})
+	if err != nil || len(b.Problems()) != 1 {
+		t.Fatalf("mismatch: %v %v", err, b.Problems())
 	}
-	ro, err := open(us, true)
-	if err != nil || ro.DateFormat() != DefaultDateFormat || len(ro.Problems()) != 1 {
-		t.Fatalf("read-only: %v %q %v", err, ro.DateFormat(), ro.Problems())
+	if _, err := os.Stat(formatPath); err == nil {
+		t.Fatal("a format the lines aren't in was recorded")
 	}
-	// An archive from before the format was recorded: its lines decide.
-	if err := os.Remove(filepath.Join(root, metaDir, formatFile)); err != nil {
-		t.Fatal(err)
+	if b, err := Open(Options{Root: root, Location: time.UTC}); err != nil || len(b.Problems()) != 0 {
+		t.Fatalf("matching: %v %v", err, b.Problems())
 	}
-	if _, err := open(us, false); err == nil {
-		t.Fatal("lines in another format accepted")
-	}
-	if _, err := open(DefaultDateFormat, false); err != nil {
-		t.Fatal(err)
+	if data, _ := os.ReadFile(formatPath); strings.TrimSpace(string(data)) != DefaultDateFormat {
+		t.Fatalf("recorded %q", data)
 	}
 }

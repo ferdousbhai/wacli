@@ -92,6 +92,7 @@ func Open(opts Options) (*Archive, error) {
 	if strings.TrimSpace(opts.Root) == "" {
 		return nil, errors.New("archive root is required")
 	}
+	chosen := opts.DateFormat // "" lets the archive's recorded format decide
 	if opts.DateFormat == "" {
 		opts.DateFormat = DefaultDateFormat
 	}
@@ -127,56 +128,75 @@ func Open(opts Options) (*Archive, error) {
 	for jid, info := range a.meta {
 		info.JID = jid
 	}
-	if err := a.checkDateFormat(); err != nil {
+	if err := a.settleDateFormat(chosen); err != nil {
 		return nil, err
 	}
 	a.shortenFolders()
 	return a, a.finishRenames()
 }
 
-// checkDateFormat keeps the archive in one date format: lines in another
-// can't be read back, so edits and deletes of them would fail. The first
-// format used is recorded; a different one is refused (read-only, the
-// recorded one is used and the mismatch reported).
-func (a *Archive) checkDateFormat() error {
+// settleDateFormat keeps the archive in one date format: lines in another
+// couldn't be read back for edits and deletes. The format is recorded once
+// lines exist in it, and from then on it's the one used, whatever chosen
+// says (a service may lack the setting a shell had). Before that, chosen (or
+// the default) is used and recorded. Nothing here refuses to open: a
+// mismatch is noted, or reported as a problem.
+func (a *Archive) settleDateFormat(chosen string) error {
 	data, err := os.ReadFile(a.metaPath(formatFile))
-	switch {
-	case err == nil:
-		stored := strings.TrimRight(string(data), "\n")
-		if stored == a.opts.DateFormat {
-			return nil
-		}
-		msg := fmt.Sprintf("this archive is written with --date-format %q, not %q: pass that (or set WACLI_DATE_FORMAT), so new lines match the old", stored, a.opts.DateFormat)
-		if !a.opts.ReadOnly {
-			return errors.New(msg)
-		}
-		a.opts.DateFormat = stored
-		a.probMu.Lock()
-		a.problems = append(a.problems, msg)
-		a.probMu.Unlock()
-		return nil
-	case !errors.Is(err, os.ErrNotExist):
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
-	case a.opts.ReadOnly:
+	}
+	stored := strings.TrimSpace(string(data))
+	if stored != "" && (chosen == "" || chosen == stored) {
+		a.opts.DateFormat = stored
 		return nil
 	}
-	// Not recorded yet (a new archive, or one from before this check): its
-	// existing lines must already be in this format.
-	for _, info := range a.meta {
-		data, err := os.ReadFile(filepath.Join(a.path(info.Folder), ChatFile))
-		if err != nil || len(data) == 0 {
-			continue
-		}
-		first, _, _ := strings.Cut(string(data), "\r\n")
+	first, hasLines := a.firstEntry()
+	if stored != "" && hasLines {
+		a.opts.DateFormat = stored
+		a.opts.Logf("note: using this archive's --date-format %q, not %q: its lines are written in it", stored, chosen)
+		return nil
+	}
+	// Nothing recorded yet, or no lines to keep consistent: chosen decides.
+	if chosen != "" {
+		a.opts.DateFormat = chosen
+	}
+	if hasLines { // written before formats were recorded
 		if _, err := Parse(first, a.opts.DateFormat, a.opts.Location); err != nil {
-			return fmt.Errorf("%s doesn't read with --date-format %q (%v): pass the format its lines use", info.Folder, a.opts.DateFormat, err)
+			a.probMu.Lock()
+			a.problems = append(a.problems, fmt.Sprintf("existing lines don't read with --date-format %q (%v): pass the format they use", a.opts.DateFormat, err))
+			a.probMu.Unlock()
+			return nil
 		}
-		break
+	}
+	if a.opts.ReadOnly || stored == a.opts.DateFormat {
+		return nil
 	}
 	return a.writeFile(a.metaPath(formatFile), func(w *bufio.Writer) error {
 		_, err := w.WriteString(a.opts.DateFormat + "\n")
 		return err
 	})
+}
+
+// firstEntry is the first chat line in the archive (by folder name), if any.
+func (a *Archive) firstEntry() (string, bool) {
+	folders := make([]string, 0, len(a.meta))
+	for _, info := range a.meta {
+		folders = append(folders, info.Folder)
+	}
+	sort.Strings(folders)
+	for _, folder := range folders {
+		data, err := os.ReadFile(filepath.Join(a.path(folder), ChatFile))
+		if err != nil {
+			continue
+		}
+		for _, e := range SplitEntries(string(data)) {
+			if headerRE.MatchString(e) {
+				return e, true
+			}
+		}
+	}
+	return "", false
 }
 
 // shortenFolders gives a new folder to a chat whose name was too long for

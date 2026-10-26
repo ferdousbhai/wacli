@@ -97,7 +97,7 @@ overwrites a skill it didn't install (`--force` adopts one, keeping a backup).
 |---|---|---|
 | `--archive` | `WACLI_ARCHIVE_DIR` | `~/WhatsApp` |
 | `--store` (session) | `WACLI_STORE_DIR` | `~/.local/state/wacli` on Linux, `~/.wacli` elsewhere |
-| `--date-format` | `WACLI_DATE_FORMAT` | `2006-01-02, 15:04:05` (Go layout; match your phone's region; fixed once the archive exists) |
+| `--date-format` | `WACLI_DATE_FORMAT` | `2006-01-02, 15:04:05` (Go layout; match your phone's region; set it for the first `auth`, the archive then keeps it) |
 
 Times are written in the computer's time zone, as the phone writes them in its own.
 

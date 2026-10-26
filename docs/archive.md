@@ -16,7 +16,7 @@ messages keep arriving. There is no message database: the folders are the data.
     _chat.txt
   .wacli/                                     bookkeeping, never needed to read chats
     chats.json                                JID → folder, chat kind, names
-    date-format                               the --date-format every line is written in
+    date-format                               the --date-format its lines are written in (used from then on)
     index/<jid>.tsv                           one row per _chat.txt entry, same order:
                                               msg id, unix ts, from_me, sender JID
     index/<jid>.tsv.orphaned-<time>           index set aside when a chat folder went missing
