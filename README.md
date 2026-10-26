@@ -20,7 +20,7 @@ Keep your WhatsApp chats as plain folders, shaped exactly like the iPhone's
 ```
 
 There is no database to query. People open the folders; agents `cat`, `grep -r`
-and `tail -f` them. wacli links to WhatsApp as a companion device (like
+and `tail -F` them. wacli links to WhatsApp as a companion device (like
 WhatsApp Desktop) using [whatsmeow](https://github.com/tulir/whatsmeow).
 
 Started from [openclaw/wacli](https://github.com/openclaw/wacli) (MIT), which

@@ -103,6 +103,7 @@ Gaps:
   stretch of history. `wacli import <export.zip>` merges a phone export into the
   archive, matching entries by time, sender and text.
 
-Readers need nothing from wacli: `cat`, `grep -r`, `tail -f _chat.txt`, or an
-editor. `wacli send`, `backfill` and `import` go through the running sync over
-its socket, so what they change lands in the archive like anything else.
+Readers need nothing from wacli: `cat`, `grep -r`, `tail -F _chat.txt`
+(capital F: edits replace the file), or an editor. `wacli send`, `backfill`,
+`refetch` and `import` go through the running sync over its socket, so what
+they change lands in the archive like anything else.

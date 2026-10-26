@@ -91,7 +91,10 @@ are added; attachments fill in entries that say `… omitted`. Importing the sam
 export again changes nothing. The chat is found from the export's name; pass
 `--chat` when two chats share it. `--date-format` must match the export (while
 `sync --follow` runs, the import is done by it, with its `--date-format` and
-`--archive`).
+`--archive`). Times are matched in the computer's time zone, as the export
+wrote them in the phone's: if the two differ, stop the sync and run the import
+with `TZ` set to the phone's zone (e.g. `TZ=Asia/Makassar wacli import …`), or
+every line is added again.
 
 ## chats
 
