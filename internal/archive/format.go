@@ -126,6 +126,25 @@ func renderBody(e Entry) string {
 // colons ("Dr.A:Smith", "Bob:") and line breaks otherwise.
 var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ((?s:.*?)):(?: |$)`)
 
+// ParseAs is Parse for an entry known to be from sender: a name holding ": "
+// ("~ Bob: CEO") can't be told from the text otherwise, as in an export.
+func ParseAs(raw, sender, dateFormat string, loc *time.Location) (Entry, error) {
+	i := strings.Index(raw, "] ")
+	if i < 0 || !strings.Contains(sender, ":") {
+		return Parse(raw, dateFormat, loc)
+	}
+	head, rest := raw[:i+2], raw[i+2:]
+	if !strings.HasPrefix(rest, sender+": ") && rest != sender+":" {
+		return Parse(raw, dateFormat, loc)
+	}
+	// The name without its colons parses at the right ": ".
+	e, err := Parse(head+strings.ReplaceAll(sender, ":", "\uFF1A")+rest[len(sender):], dateFormat, loc)
+	if err == nil {
+		e.Sender = sender
+	}
+	return e, err
+}
+
 // Parse reads one entry. Times are interpreted in loc.
 func Parse(raw, dateFormat string, loc *time.Location) (Entry, error) {
 	if dateFormat == "" {

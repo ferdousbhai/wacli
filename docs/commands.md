@@ -2,7 +2,8 @@
 
 Global flags: `--archive` (`WACLI_ARCHIVE_DIR`, default `~/WhatsApp`), `--store`
 (`WACLI_STORE_DIR`, the session), `--date-format` (`WACLI_DATE_FORMAT`, a Go
-time layout matching your phone's region), `--json`.
+time layout matching your phone's region; the archive records the first one used
+and refuses another, as old lines couldn't be read back), `--json`.
 
 One process owns the WhatsApp session at a time. While `sync --follow` runs,
 `send`, `backfill`, `refetch` and `import` hand their work to it; stopping the client

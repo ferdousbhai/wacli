@@ -1,8 +1,11 @@
 package archive
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ids(c *Chat) string {
@@ -68,5 +71,57 @@ func TestNextHistoryBatchGoesBeforeTheLastWhileAnImportHolds(t *testing.T) {
 	c.Release()
 	if got := ids(c); got != "A B E" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestParseAsKeepsANameHoldingAColon(t *testing.T) {
+	raw := "[2025-10-24, 04:39:33] ~ Bob: CEO: hello: all"
+	e, err := ParseAs(raw, "~ Bob: CEO", DefaultDateFormat, time.UTC)
+	if err != nil || e.Sender != "~ Bob: CEO" || e.Text != "hello: all" {
+		t.Fatalf("%+v %v", e, err)
+	}
+	if got := Render(e, DefaultDateFormat); got != raw {
+		t.Fatalf("render %q", got)
+	}
+	// Another sender, or none known: as Parse.
+	for _, sender := range []string{"", "Dana", "~ Bob: Sales"} {
+		if e, _ := ParseAs(raw, sender, DefaultDateFormat, time.UTC); e.Sender != "~ Bob" {
+			t.Fatalf("%q: %+v", sender, e)
+		}
+	}
+	media := "‎[2025-10-24, 04:39:33] ~ Bob: CEO: ‎<attached: 00000001-PHOTO-x.jpg>"
+	if e, _ := ParseAs(media, "~ Bob: CEO", DefaultDateFormat, time.UTC); e.Attachment != "00000001-PHOTO-x.jpg" || e.Text != "" {
+		t.Fatalf("media %+v", e)
+	}
+}
+
+func TestArchiveKeepsOneDateFormat(t *testing.T) {
+	root := t.TempDir()
+	open := func(format string, readOnly bool) (*Archive, error) {
+		return Open(Options{Root: root, DateFormat: format, Location: time.UTC, ReadOnly: readOnly})
+	}
+	a, err := open("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := a.EnsureChat("62@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "A", TS: 10}, text("a"))
+	const us = "1/2/06, 3:04:05 PM"
+	if _, err := open(us, false); err == nil || !strings.Contains(err.Error(), DefaultDateFormat) {
+		t.Fatalf("another format accepted: %v", err)
+	}
+	ro, err := open(us, true)
+	if err != nil || ro.DateFormat() != DefaultDateFormat || len(ro.Problems()) != 1 {
+		t.Fatalf("read-only: %v %q %v", err, ro.DateFormat(), ro.Problems())
+	}
+	// An archive from before the format was recorded: its lines decide.
+	if err := os.Remove(filepath.Join(root, metaDir, formatFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open(us, false); err == nil {
+		t.Fatal("lines in another format accepted")
+	}
+	if _, err := open(DefaultDateFormat, false); err != nil {
+		t.Fatal(err)
 	}
 }

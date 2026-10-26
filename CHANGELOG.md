@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.26.1 - 2026-10-26
+
+- Editing or deleting a message keeps its sender's name whole when the name holds ": ".
+- The archive records its `--date-format` and refuses another, which would leave older lines unreadable for edits and deletes; `doctor` reports a mismatch.
+- `backfill` counts exactly the messages its pages added.
+
 ## 0.26.0 - 2026-10-26
 
 First release of this fork: WhatsApp chats kept as iPhone-style export folders.

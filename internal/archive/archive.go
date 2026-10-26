@@ -24,6 +24,7 @@ const (
 	ChatFile    = "_chat.txt"
 	metaDir     = ".wacli"
 	chatsFile   = "chats.json"
+	formatFile  = "date-format" // the layout the archive's lines are written in
 	indexDir    = "index"
 	folderStart = "WhatsApp Chat - "
 )
@@ -78,7 +79,14 @@ type Archive struct {
 	chats    map[string]*Chat
 	probMu   sync.Mutex
 	problems []string // found while loading chats; see Problems
+
+	senderName func(chat string, r Row) string // see SetSenderNames
 }
+
+// SetSenderNames gives the archive the display name a row's sender has now,
+// so changing an entry (an edit, a delete) keeps a name holding ": " whole.
+// Set it before the chats are used; fn runs with a chat locked.
+func (a *Archive) SetSenderNames(fn func(chat string, r Row) string) { a.senderName = fn }
 
 func Open(opts Options) (*Archive, error) {
 	if strings.TrimSpace(opts.Root) == "" {
@@ -119,8 +127,56 @@ func Open(opts Options) (*Archive, error) {
 	for jid, info := range a.meta {
 		info.JID = jid
 	}
+	if err := a.checkDateFormat(); err != nil {
+		return nil, err
+	}
 	a.shortenFolders()
 	return a, a.finishRenames()
+}
+
+// checkDateFormat keeps the archive in one date format: lines in another
+// can't be read back, so edits and deletes of them would fail. The first
+// format used is recorded; a different one is refused (read-only, the
+// recorded one is used and the mismatch reported).
+func (a *Archive) checkDateFormat() error {
+	data, err := os.ReadFile(a.metaPath(formatFile))
+	switch {
+	case err == nil:
+		stored := strings.TrimRight(string(data), "\n")
+		if stored == a.opts.DateFormat {
+			return nil
+		}
+		msg := fmt.Sprintf("this archive is written with --date-format %q, not %q: pass that (or set WACLI_DATE_FORMAT), so new lines match the old", stored, a.opts.DateFormat)
+		if !a.opts.ReadOnly {
+			return errors.New(msg)
+		}
+		a.opts.DateFormat = stored
+		a.probMu.Lock()
+		a.problems = append(a.problems, msg)
+		a.probMu.Unlock()
+		return nil
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	case a.opts.ReadOnly:
+		return nil
+	}
+	// Not recorded yet (a new archive, or one from before this check): its
+	// existing lines must already be in this format.
+	for _, info := range a.meta {
+		data, err := os.ReadFile(filepath.Join(a.path(info.Folder), ChatFile))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		first, _, _ := strings.Cut(string(data), "\r\n")
+		if _, err := Parse(first, a.opts.DateFormat, a.opts.Location); err != nil {
+			return fmt.Errorf("%s doesn't read with --date-format %q (%v): pass the format its lines use", info.Folder, a.opts.DateFormat, err)
+		}
+		break
+	}
+	return a.writeFile(a.metaPath(formatFile), func(w *bufio.Writer) error {
+		_, err := w.WriteString(a.opts.DateFormat + "\n")
+		return err
+	})
 }
 
 // shortenFolders gives a new folder to a chat whose name was too long for
@@ -1033,7 +1089,15 @@ func (c *Chat) updateLocked(id string, fn func(e *Entry) bool) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
+	sender := ""
+	if name := c.a.senderName; name != nil {
+		if i, ok := c.byID[id]; ok {
+			sender = name(c.info.JID, c.rows[i])
+		} else if i, ok := c.pendingByID[id]; ok {
+			sender = name(c.info.JID, c.pending[i].row)
+		}
+	}
+	e, err := ParseAs(*text, sender, c.a.opts.DateFormat, c.a.opts.Location)
 	if err != nil {
 		return false, err
 	}

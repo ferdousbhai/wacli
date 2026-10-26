@@ -2,12 +2,15 @@ package archiver
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -68,5 +71,28 @@ func TestBackfillCountsOnlyWhatThePagesBrought(t *testing.T) {
 	}
 	if res.Added != 1 {
 		t.Fatalf("added %d, want 1 (the live message isn't backfill's)", res.Added)
+	}
+}
+
+func TestEditAndDeleteKeepANameHoldingAColon(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	const bob = "6285555555555@s.whatsapp.net"
+	msg := func(id string, ts int64, m *waE2E.Message) *events.Message {
+		e := live(group, bob, id, false, ts, m)
+		e.Info.PushName = "Bob: CEO"
+		return e
+	}
+	a.handle(msg("B1", t0, text("hello")))
+	a.handle(msg("B2", t0+1, text("bye")))
+	a.handle(msg("E1", t0+2, &waE2E.Message{EditedMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(), Key: &waCommon.MessageKey{RemoteJID: proto.String(group), FromMe: proto.Bool(true), ID: proto.String("B1")},
+		EditedMessage: text("hello there"),
+	}}}}))
+	a.handle(msg("R1", t0+3, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_REVOKE.Enum(), Key: &waCommon.MessageKey{RemoteJID: proto.String(group), FromMe: proto.Bool(true), ID: proto.String("B2")},
+	}}))
+	got := chatFile(t, ar, group)
+	if !strings.Contains(got, "Bob: CEO: hello there ‎<This message was edited>") || !strings.Contains(got, "Bob: CEO: ‎This message was deleted.") {
+		t.Fatalf("got\n%q", got)
 	}
 }

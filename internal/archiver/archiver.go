@@ -64,6 +64,7 @@ type historyBatch struct {
 	last   *archive.Row      // last message of the page, in the phone's order
 	n      int               // messages in the page
 	oldest int64             // timestamp of its oldest message
+	added  int               // messages it added to the archive
 	kinds  map[string]string // on demand: message ID → its type
 }
 
@@ -91,6 +92,10 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		seenPayload:    map[string]bool{},
 		namesWanted:    map[string]bool{},
 	}
+	ar.SetSenderNames(func(chat string, r archive.Row) string {
+		jid, _ := types.ParseJID(chat)
+		return a.senderName(context.Background(), wa.ParsedMessage{Chat: jid, SenderJID: r.Sender, FromMe: r.FromMe})
+	})
 	q, err := newMediaQueue(a)
 	if err != nil {
 		return nil, err
@@ -224,7 +229,15 @@ func (a *Archiver) handle(evt any) {
 // batch collects the writes of one history chunk: every chat it touches is
 // held and written once at the end. A nil batch writes through.
 type batch struct {
-	held map[string]*archive.Chat
+	held  map[string]*archive.Chat
+	added map[string]int // chat → messages this chunk added
+}
+
+// inserted counts a message added to c (outside a batch, nothing to do).
+func (b *batch) inserted(c *archive.Chat) {
+	if b != nil {
+		b.added[c.JID()]++
+	}
 }
 
 func (b *batch) use(c *archive.Chat) {
@@ -250,7 +263,7 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		a.nameChanged()
 	}
 	before := a.added.Load()
-	b := &batch{held: map[string]*archive.Chat{}}
+	b := &batch{held: map[string]*archive.Chat{}, added: map[string]int{}}
 	pages := map[string]historyBatch{}
 	type wanted struct {
 		ch     chan refetchAnswer
@@ -334,8 +347,12 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		a.onDemand.Add(1)
 		// A waiting backfill reads the chat, so tell it only once written.
 		for chatID, page := range pages {
-			if jid, err := types.ParseJID(chatID); err == nil && a.deliverRefetch(session, a.chatKey(ctx, jid).String(), page) {
-				continue
+			if jid, err := types.ParseJID(chatID); err == nil {
+				key := a.chatKey(ctx, jid).String()
+				page.added = b.added[key]
+				if a.deliverRefetch(session, key, page) {
+					continue
+				}
 			}
 			if !a.deliverBackfill(ctx, chatID, session, page) {
 				// Nothing asked for it, or the phone names requests in a way
@@ -469,6 +486,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		}
 	}
 	if inserted {
+		b.inserted(c)
 		a.added.Add(1)
 		// Again after the insert: a refresh pass that read the chat before
 		// the entry existed may have cleared the flag.
@@ -669,6 +687,7 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 		return archive.Entry{Sender: sender, Deleted: text}
 	})
 	if inserted {
+		b.inserted(c)
 		a.added.Add(1)
 		if fallback {
 			a.needsNames(c.JID()) // as in archiveMessage

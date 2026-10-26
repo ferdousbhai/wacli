@@ -60,21 +60,7 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 		delete(a.backfillReq, chatJID)
 		a.mu.Unlock()
 	}()
-	// Pages bring messages older than now; live ones arriving meanwhile
-	// aren't counted.
-	start := time.Now().Unix()
-	older := func() int {
-		n := 0
-		for _, r := range c.Rows() {
-			if r.TS < start {
-				n++
-			}
-		}
-		return n
-	}
-	before := older()
 	defer func() {
-		res.Added = int64(older() - before)
 		if rows := c.Rows(); len(rows) > 0 {
 			res.Oldest = time.Unix(rows[0].TS, 0)
 		}
@@ -87,6 +73,7 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 		if err != nil {
 			return res, err
 		}
+		res.Added += int64(batch.added) // what its pages added; not live arrivals
 		if batch.last == nil || seen[batch.last.ID] {
 			res.Done = true
 			return res, a.ar.UpdateInfo(chatJID, func(ci *archive.ChatInfo) { ci.BackfillDone = true; ci.Backfill = cursor })
