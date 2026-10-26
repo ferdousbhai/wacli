@@ -59,6 +59,7 @@ type refetchJob struct {
 	folder string
 	anchor archive.Row
 	want   []archive.Row
+	seen   map[string]bool // anchors asked from so far for these lines
 }
 
 // refetchWaiter is the request a Refetch is waiting on; archiveHistory hands
@@ -143,12 +144,26 @@ func (a *Archiver) Refetch(ctx context.Context, o RefetchOptions) (res RefetchRe
 		}
 	}()
 	silent, sent := 0, 0 // silent: requests in a row the phone didn't reply to at all
-	heard := false       // the phone answered something in this run
+	// Silence counts against a line only once a later request is answered:
+	// the phone was awake, so it was silent about that chat, not locked.
+	var unheard []refetchJob
+	struck := map[string]bool{} // one strike a line per run
+	strike := func(j refetchJob, rows []archive.Row) {
+		var fresh []archive.Row
+		for _, row := range rows {
+			if it := items[row.ID]; !struck[row.ID] && (it == nil || it.Kind == "") {
+				struck[row.ID] = true
+				fresh = append(fresh, row)
+			}
+		}
+		a.strike(j, fresh, settle)
+	}
 	for len(jobs) > 0 && (o.MaxRequests <= 0 || sent < o.MaxRequests) {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
 		j := jobs[0]
+		jobs = jobs[1:]
 		sent++
 		res.last = j.folder
 		got, reply, err := a.requestAround(ctx, j, o.Count, o.Wait)
@@ -160,28 +175,35 @@ func (a *Archiver) Refetch(ctx context.Context, o RefetchOptions) (res RefetchRe
 				missing = append(missing, row)
 			}
 		}
+		rest := j
+		rest.want = missing
 		switch {
 		case errors.Is(err, ErrNoAnswer):
-			if heard { // silent about this chat only, not just locked
-				a.strike(j, missing, settle)
+			if len(missing) > 0 {
+				unheard = append(unheard, rest)
+				jobs = append(jobs, rest) // tried again last
 			}
 			// WhatsApp stops answering soon after the phone locks: stop
 			// rather than mark lines unanswered one timeout at a time.
 			if silent++; silent >= 3 || o.MaxRequests > 0 {
 				return res, ErrPhoneQuiet
 			}
-			jobs = append(jobs[1:], refetchJob{j.c, j.folder, j.anchor, missing}) // tried again last
 			continue
 		case err != nil:
+			jobs = append([]refetchJob{rest}, jobs...) // still to do
 			return res, err
 		}
-		silent, heard = 0, true
-		jobs = jobs[1:]
+		silent = 0
+		for _, u := range unheard {
+			strike(u, u.want)
+		}
+		unheard = nil
 		// What the reply reached back past, the phone doesn't have; older
-		// lines need the history before the reply's oldest message.
+		// lines (or ones in the same second as its oldest message) need the
+		// history before the reply's oldest message.
 		var older []archive.Row
 		for _, row := range missing {
-			if reply.n > 0 && row.TS >= reply.oldest {
+			if reply.n > 0 && row.TS > reply.oldest {
 				settle(j, row, "not on phone", false)
 			} else {
 				older = append(older, row)
@@ -189,10 +211,16 @@ func (a *Archiver) Refetch(ctx context.Context, o RefetchOptions) (res RefetchRe
 		}
 		switch {
 		case len(older) == 0:
-		case reply.last != nil && reply.last.ID != j.anchor.ID:
-			jobs = append([]refetchJob{{j.c, j.folder, *reply.last, older}}, jobs...)
+		case reply.last != nil && !j.seen[reply.last.ID]:
+			next := refetchJob{c: j.c, folder: j.folder, anchor: *reply.last, want: older, seen: map[string]bool{reply.last.ID: true}}
+			for id := range j.seen {
+				next.seen[id] = true
+			}
+			jobs = append([]refetchJob{next}, jobs...)
 		default:
-			a.strike(j, older, settle) // an empty reply: the phone didn't know the anchor
+			// An empty reply (the phone didn't know the anchor), or pages
+			// going round in a circle.
+			strike(j, older)
 		}
 	}
 	return res, nil
@@ -249,7 +277,7 @@ func (a *Archiver) refetchJobs(ctx context.Context, o RefetchOptions) ([]refetch
 				// the phone doesn't know.
 				anchor = archive.Row{ID: "3EB0" + strings.ToUpper(rows[last].ID), TS: rows[last].TS + 1, FromMe: true}
 			}
-			j := refetchJob{c: c, folder: info.Folder, anchor: anchor}
+			j := refetchJob{c: c, folder: info.Folder, anchor: anchor, seen: map[string]bool{anchor.ID: true}}
 			for len(blanks) > 0 && blanks[len(blanks)-1] > last-max(o.Count/2, 1) {
 				j.want = append(j.want, rows[blanks[len(blanks)-1]])
 				blanks = blanks[:len(blanks)-1]
@@ -326,6 +354,15 @@ func (a *Archiver) requestAround(ctx context.Context, j refetchJob, count int, w
 			return got, nil, ctx.Err()
 		case reply := <-w.replies:
 			drain()
+			// Lines in the reply that weren't waited for when it was
+			// archived (it came late, for an earlier request) are answered
+			// from it too.
+			for _, row := range j.want {
+				if kind, ok := reply.kinds[row.ID]; ok && got[row.ID].kind == "" {
+					e, found := j.c.Get(row.ID)
+					got[row.ID] = refetchAnswer{id: row.ID, kind: kind, filled: found && !blank(e)}
+				}
+			}
 			return got, &reply, nil
 		case <-time.After(wait):
 		}
@@ -403,32 +440,44 @@ func (a *Archiver) phoneActive(at time.Time) {
 func (a *Archiver) RefetchInBackground() { a.background(a.refetchLoop) }
 
 func (a *Archiver) refetchLoop(ctx context.Context) {
-	const perRound, pause = 5, 2 * time.Minute
-	jobs, err := a.refetchJobs(ctx, RefetchOptions{Count: 50})
-	if err != nil {
-		if ctx.Err() == nil {
-			a.logf("warning: finding empty lines: %v", err)
-		}
-		return
-	}
-	backlog, left := map[string]bool{}, 0
-	for _, j := range jobs {
-		backlog[j.c.JID()] = true
-		left += len(j.want)
-	}
-	a.status.setUncheckedLines(left)
+	const perRound, pause, rescan = 5, 2 * time.Minute, time.Hour
+	var backlog map[string]bool
+	var scanned time.Time
 	cursor := ""
-	for len(backlog) > 0 {
+	for {
+		if backlog == nil || len(backlog) == 0 && time.Since(scanned) > rescan {
+			// At start, and now and then for lines archived without a type
+			// (a message with no content).
+			jobs, err := a.refetchJobs(ctx, RefetchOptions{Count: 50})
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				a.logf("warning: finding empty lines: %v", err)
+			}
+			backlog, scanned = map[string]bool{}, time.Now()
+			left := 0
+			for _, j := range jobs {
+				backlog[j.c.JID()] = true
+				left += len(j.want)
+			}
+			a.status.setUncheckedLines(left)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-a.phoneSeen:
 		}
+		if len(backlog) == 0 {
+			continue
+		}
 		res, err := a.Refetch(ctx, RefetchOptions{MaxRequests: perRound, chats: backlog, cursor: cursor})
 		if ctx.Err() != nil {
 			return
 		}
-		cursor, backlog = res.last, res.leftChats
+		if res.leftChats != nil { // nil: the round failed before asking
+			cursor, backlog = res.last, res.leftChats
+		}
 		answered := 0
 		for _, it := range res.Items {
 			if it.Kind != "" {

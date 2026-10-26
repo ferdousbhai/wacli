@@ -326,8 +326,8 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			if sp, err := defaultSkillPaths(); err == nil {
 				info["agent_skill"] = string(sp.state())
-				// Optional: only one that's there and stale is a problem.
-				if st := sp.state(); st == skillOutdated || st == skillUnmanaged {
+				// Optional: only wacli's own copy gone stale is a problem.
+				if st := sp.state(); st == skillOutdated {
 					problems = append(problems, "agent skill "+string(st)+": run `wacli skill install`")
 				}
 			}

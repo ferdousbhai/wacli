@@ -57,6 +57,7 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 	defer func() {
 		a.mu.Lock()
 		delete(a.backfill, chatJID)
+		delete(a.backfillReq, chatJID)
 		a.mu.Unlock()
 	}()
 	before := c.Len()
@@ -128,7 +129,12 @@ func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor arch
 			ID:            anchor.ID,
 			Timestamp:     time.Unix(anchor.TS, 0),
 		}
-		if _, err := a.requestHistory(ctx, info, count, nil); err != nil {
+		sent := func(id types.MessageID) {
+			a.mu.Lock()
+			a.backfillReq[c.JID()] = string(id)
+			a.mu.Unlock()
+		}
+		if _, err := a.requestHistory(ctx, info, count, sent); err != nil {
 			return historyBatch{}, err
 		}
 		select {
@@ -146,7 +152,9 @@ func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor arch
 // ErrNoAnswer is a history request the phone didn't answer in time.
 var ErrNoAnswer = errors.New("phone did not answer the history request (is it online?)")
 
-func (a *Archiver) deliverBackfill(ctx context.Context, chatID string, batch historyBatch) {
+// deliverBackfill hands a page to the backfill of its chat, unless the page
+// names another request (a refetch's, or an earlier one of this backfill).
+func (a *Archiver) deliverBackfill(ctx context.Context, chatID, session string, batch historyBatch) {
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return
@@ -154,6 +162,9 @@ func (a *Archiver) deliverBackfill(ctx context.Context, chatID string, batch his
 	key := a.chatKey(ctx, jid).String()
 	a.mu.Lock()
 	ch, running := a.backfill[key]
+	if session != "" && session != a.backfillReq[key] {
+		ch, running = nil, false
+	}
 	if running {
 		a.backfill[key] = nil // still reserved; each page is delivered once
 	}

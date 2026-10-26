@@ -176,8 +176,10 @@ func TestRefetchIgnoresRepliesToOtherRequests(t *testing.T) {
 		web(dana, "U1", "", false, t0, unknownMsg),
 		web(dana, "N1", "", false, t0+20, text("after")),
 	)
-	// A reply to someone else's request (a backfill, say) that lacks U1.
+	// Replies to someone else's request (a backfill, say) that reach back
+	// past U1 without it: taken for ours, they'd mark it "not on phone".
 	(&fakePhone{a: a, chat: dana, session: func(string) string { return "BACKFILL" }, msgs: []*waHistorySync.HistorySyncMsg{
+		web(dana, "OLD", "", false, t0-10, text("older")),
 		web(dana, "N1", "", false, t0+20, text("after")),
 	}}).install()
 	res, err := a.Refetch(context.Background(), RefetchOptions{Count: 50, Wait: 300 * time.Millisecond, MaxRequests: 5})
@@ -203,31 +205,172 @@ func TestReplyWithoutSessionIsMatchedByChatUnlessABackfillWaits(t *testing.T) {
 	}
 }
 
-func TestLockedPhoneLeavesLinesUncheckedButADeadChatGivesUp(t *testing.T) {
+// phoneSilentAbout answers like phone, except about chat, where it says
+// nothing; after locks it goes silent altogether.
+type phoneSilentAbout struct {
+	*fakePhone
+	chat  string
+	locks int // answered requests before it locks; -1 never
+}
+
+func (p *phoneSilentAbout) request(ctx context.Context, info types.MessageInfo, count int, sent func(types.MessageID)) (types.MessageID, error) {
+	locked := p.locks == 0
+	if p.locks > 0 {
+		p.locks--
+	}
+	if locked || info.Chat.String() == p.chat {
+		sent(types.MessageID("SILENT"))
+		return "SILENT", nil
+	}
+	return p.fakePhone.request(ctx, info, count, sent)
+}
+
+func twoChats(t *testing.T, a *Archiver) *fakePhone {
+	t.Helper()
+	for _, jid := range []string{dana, group} {
+		a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, jid, "Chat",
+			web(jid, "U-"+jid, "", false, t0, unknownMsg), web(jid, "N-"+jid, "", false, t0+20, text("after"))))
+	}
+	a.checked.kinds = map[string]map[string]string{} // as before this version
+	return &fakePhone{a: a, chat: group, msgs: []*waHistorySync.HistorySyncMsg{
+		web(group, "U-"+group, "", false, t0, albumMsg), web(group, "N-"+group, "", false, t0+20, text("after"))}}
+}
+
+func TestLockedPhoneLeavesLinesUnchecked(t *testing.T) {
 	a, _ := newTestArchiver(t)
 	archiveEmptyLines(t, a,
 		web(dana, "U1", "", false, t0, unknownMsg),
+		web(dana, "U2", "", false, t0+10, unknownMsg),
 		web(dana, "N1", "", false, t0+20, text("after")),
 	)
-	(&fakePhone{a: a, chat: dana, silent: true}).install()
+	// Answers once, about U2 (U1 is beyond the reply), then locks.
+	phone := &fakePhone{a: a, chat: dana, msgs: []*waHistorySync.HistorySyncMsg{
+		web(dana, "U1", "", false, t0, text("u1")),
+		web(dana, "U2", "", false, t0+10, text("u2")),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	}}
+	p := &phoneSilentAbout{fakePhone: phone, locks: 1}
+	a.requestHistory = p.request
 	for range noAnswerAfter + 1 {
-		if _, err := a.Refetch(context.Background(), RefetchOptions{Wait: 20 * time.Millisecond}); !errors.Is(err, ErrPhoneQuiet) {
+		if _, err := a.Refetch(context.Background(), RefetchOptions{Count: 1, Wait: 20 * time.Millisecond}); !errors.Is(err, ErrPhoneQuiet) {
 			t.Fatal(err)
 		}
 	}
-	if a.checked.has(dana, "U1") {
-		t.Fatal("a locked phone's silence recorded as an answer")
+	if !a.checked.has(dana, "U2") || a.checked.has(dana, "U1") {
+		t.Fatalf("a locked phone's silence recorded as an answer: %v", a.checked.kinds)
 	}
-	// Silent about U1's chat while answering about another: it gives up.
-	for i := range noAnswerAfter {
-		a.refetchStrikes["U1"] = i
-	}
-	j := refetchJob{c: mustChat(t, a, dana), anchor: archive.Row{ID: "N1"}, want: []archive.Row{{ID: "U1"}}}
-	a.strike(j, j.want, func(_ refetchJob, row archive.Row, kind string, _ bool) {
-		if kind != "no answer" {
-			t.Fatalf("kind %q", kind)
+}
+
+func TestChatThePhoneIsSilentAboutGivesUp(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	phone := twoChats(t, a)
+	p := &phoneSilentAbout{fakePhone: phone, chat: dana, locks: -1}
+	a.requestHistory = p.request
+	// Silence only counts once a later request is answered: start after
+	// the group, as the loop's rotation sometimes does, so Dana's comes first.
+	info, _ := a.ar.Info(group)
+	for range noAnswerAfter {
+		if _, err := a.Refetch(context.Background(), RefetchOptions{Wait: 20 * time.Millisecond, Again: true, cursor: info.Folder}); err != nil && !errors.Is(err, ErrPhoneQuiet) {
+			t.Fatal(err)
 		}
-	})
+	}
+	if kind := a.checked.kinds[dana]["U-"+dana]; kind != "no answer" {
+		t.Fatalf("silent chat: %q (%v)", kind, a.checked.kinds)
+	}
+}
+
+func TestSameSecondPageBoundaryIsAskedAgain(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	archiveEmptyLines(t, a,
+		web(dana, "U1", "", false, t0+5, unknownMsg),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	)
+	(&fakePhone{a: a, chat: dana, msgs: []*waHistorySync.HistorySyncMsg{
+		web(dana, "U1", "", false, t0+5, text("u1")),
+		web(dana, "P1", "", false, t0+5, text("same second")),
+		web(dana, "P2", "", false, t0+6, text("p2")),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	}}).install()
+	res, err := a.Refetch(context.Background(), RefetchOptions{Count: 2, Wait: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res); got["U1"] != "text (filled)" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestPagesGoingRoundInACircleStop(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	archiveEmptyLines(t, a,
+		web(dana, "U1", "", false, t0, unknownMsg),
+		web(dana, "X", "", false, t0+10, text("x")),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	)
+	// The phone's order isn't time order: before X comes Y, before Y comes X.
+	var calls int
+	a.requestHistory = func(_ context.Context, info types.MessageInfo, _ int, sent func(types.MessageID)) (types.MessageID, error) {
+		calls++
+		id := types.MessageID(fmt.Sprint("REQ", calls))
+		sent(id)
+		next := map[string]string{"N1": "X", "X": "Y", "Y": "X"}[string(info.ID)]
+		evt := history(waHistorySync.HistorySync_ON_DEMAND, dana, "Dana", web(dana, next, "", false, t0+10, text(next)))
+		evt.Notification = &waE2E.HistorySyncNotification{PeerDataRequestSessionID: proto.String(string(id))}
+		go a.handle(evt)
+		return id, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := a.Refetch(ctx, RefetchOptions{Count: 1, Wait: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if calls > 4 {
+		t.Fatalf("%d requests for one line", calls)
+	}
+}
+
+func TestLateReplyWithoutSessionAnswersFromItsOwnContents(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	archiveEmptyLines(t, a,
+		web(dana, "A1", "", false, t0+10, albumMsg),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	)
+	// An earlier request's reply, archived before this run waited for A1
+	// (so no answer was sent for it), arrives naming no request: matched by
+	// chat, it must answer A1 from its own contents, not leave it missing
+	// (which, as the reply reaches back past A1, would mean "not on phone").
+	page := history(waHistorySync.HistorySync_ON_DEMAND, dana, "Dana",
+		web(dana, "A1", "", false, t0+10, albumMsg), web(dana, "OLD", "", false, t0, text("old")))
+	a.handle(page)
+	a.requestHistory = func(_ context.Context, _ types.MessageInfo, _ int, sent func(types.MessageID)) (types.MessageID, error) {
+		sent("REQ")
+		go a.deliverRefetch("", dana, historyBatch{n: 2, oldest: t0, last: &archive.Row{ID: "OLD", TS: t0}, kinds: map[string]string{"A1": "album", "OLD": "text"}})
+		return "REQ", nil
+	}
+	res, err := a.Refetch(context.Background(), RefetchOptions{Wait: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res); got["A1"] != "album" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestBackfillTakesOnlyItsOwnPages(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	ch := make(chan historyBatch, 1)
+	a.backfill[dana] = ch
+	a.backfillReq[dana] = "MINE"
+	a.deliverBackfill(context.Background(), dana, "REFETCH", historyBatch{n: 7})
+	select {
+	case <-ch:
+		t.Fatal("a refetch reply became a backfill page")
+	default:
+	}
+	a.deliverBackfill(context.Background(), dana, "MINE", historyBatch{n: 1})
+	if b := <-ch; b.n != 1 {
+		t.Fatalf("page %+v", b)
+	}
 }
 
 func TestRefetchRoundCarriesOnAfterTheLastChat(t *testing.T) {
@@ -306,13 +449,4 @@ func TestPhoneUseStartsARefetchRound(t *testing.T) {
 	if !signalled() {
 		t.Fatal("a chat read on the phone is a sign it's in use")
 	}
-}
-
-func mustChat(t *testing.T, a *Archiver, jid string) *archive.Chat {
-	t.Helper()
-	c, err := a.ar.Chat(jid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return c
 }

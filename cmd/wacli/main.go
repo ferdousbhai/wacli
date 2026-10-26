@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -43,7 +44,7 @@ func main() {
 	if err := newRoot().Execute(); err != nil {
 		if !errors.As(err, new(printedError)) {
 			// Cobra's own: an unknown command, a bad flag or argument.
-			_ = out.WriteError(os.Stderr, false, err)
+			_ = out.WriteError(os.Stderr, slices.Contains(os.Args[1:], "--json") || slices.Contains(os.Args[1:], "--json=true"), err)
 		}
 		if errors.Is(err, errUnlinked) {
 			os.Exit(exitUnlinked)

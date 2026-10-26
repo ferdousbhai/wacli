@@ -52,6 +52,7 @@ type Archiver struct {
 
 	mu             sync.Mutex
 	backfill       map[string]chan historyBatch  // chat JID → backfill waiting for a page
+	backfillReq    map[string]string             // chat JID → its backfill's latest request
 	refetch        map[string]chan refetchAnswer // message ID → Refetch waiting for it
 	refetchWait    *refetchWaiter                // the request a Refetch waits on
 	refetchStrikes map[string]int                // message ID → requests that told nothing
@@ -60,9 +61,10 @@ type Archiver struct {
 }
 
 type historyBatch struct {
-	last   *archive.Row // last message of the page, in the phone's order
-	n      int          // messages in the page
-	oldest int64        // timestamp of its oldest message
+	last   *archive.Row      // last message of the page, in the phone's order
+	n      int               // messages in the page
+	oldest int64             // timestamp of its oldest message
+	kinds  map[string]string // on demand: message ID → its type
 }
 
 func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Archiver, error) {
@@ -83,6 +85,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		phoneSeen:      make(chan struct{}, 1),
 		checked:        loadCheckedLines(ar.Root(), logf),
 		backfill:       map[string]chan historyBatch{},
+		backfillReq:    map[string]string{},
 		refetch:        map[string]chan refetchAnswer{},
 		refetchStrikes: map[string]int{},
 		seenPayload:    map[string]bool{},
@@ -300,6 +303,12 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 				page.oldest = ts
 			}
 			page.n++
+			if data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+				if page.kinds == nil {
+					page.kinds = map[string]string{}
+				}
+				page.kinds[key.GetID()] = webKind(chatID, web)
+			}
 		}
 		pages[chatID] = page
 	}
@@ -319,7 +328,7 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 			if jid, err := types.ParseJID(chatID); err == nil && a.deliverRefetch(session, a.chatKey(ctx, jid).String(), page) {
 				continue
 			}
-			a.deliverBackfill(ctx, chatID, page)
+			a.deliverBackfill(ctx, chatID, session, page)
 		}
 	}
 	if n := a.added.Load() - before; n > 0 {
