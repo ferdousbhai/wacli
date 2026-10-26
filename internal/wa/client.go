@@ -11,9 +11,7 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
-	"go.mau.fi/whatsmeow/proto/waE2E"
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -332,51 +330,6 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 		return "", err
 	}
 	return resp.ID, nil
-}
-
-// MessageKey names a message the phone is asked to resend.
-type MessageKey struct {
-	Chat   types.JID
-	Sender types.JID // groups: who sent it
-	ID     string
-	FromMe bool
-}
-
-// RequestResend asks the phone for its copies of messages. Each one comes
-// back as an *events.Message whose UnavailableRequestID is the request's ID,
-// which is passed to sent before the request goes out so no answer is missed.
-func (c *Client) RequestResend(ctx context.Context, keys []MessageKey, sent func(types.MessageID)) error {
-	c.mu.Lock()
-	cli := c.client
-	c.mu.Unlock()
-	if !ready(cli) {
-		return ErrNotConnected
-	}
-	if cli.Store == nil || cli.Store.ID == nil {
-		return fmt.Errorf("not authenticated; run `wacli auth`")
-	}
-	req := &waE2E.PeerDataOperationRequestMessage{
-		PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_PLACEHOLDER_MESSAGE_RESEND.Enum(),
-	}
-	for _, k := range keys {
-		key := &waCommon.MessageKey{RemoteJID: proto.String(k.Chat.String()), FromMe: proto.Bool(k.FromMe), ID: proto.String(k.ID)}
-		if !k.FromMe && k.Chat.Server == types.GroupServer && !k.Sender.IsEmpty() {
-			key.Participant = proto.String(k.Sender.ToNonAD().String())
-		}
-		req.PlaceholderMessageResendRequest = append(req.PlaceholderMessageResendRequest,
-			&waE2E.PeerDataOperationRequestMessage_PlaceholderMessageResendRequest{MessageKey: key})
-	}
-	msg := &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
-		Type:                            waE2E.ProtocolMessage_PEER_DATA_OPERATION_REQUEST_MESSAGE.Enum(),
-		PeerDataOperationRequestMessage: req,
-	}}
-	id := cli.GenerateMessageID()
-	sent(id)
-	_, err := cli.SendMessage(ctx, cli.Store.ID.ToNonAD(), msg, whatsmeow.SendRequestExtra{Peer: true, ID: id})
-	if errors.Is(err, whatsmeow.ErrNotConnected) {
-		return ErrNotConnected
-	}
-	return err
 }
 
 func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error) {

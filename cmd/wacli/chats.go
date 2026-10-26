@@ -174,29 +174,30 @@ func newRefetchCmd(f *rootFlags) *cobra.Command {
 	r := request{Op: "refetch"}
 	cmd := &cobra.Command{
 		Use:   "refetch",
-		Short: "Ask the phone to resend messages archived as empty lines",
-		Long: `Finds every line with nothing after the sender's name (in one chat, or all)
-and asks your phone for its copy of each message. The phone sends it to wacli
+		Short: "Ask the phone again for messages archived as empty lines",
+		Long: `Finds lines with nothing after the sender's name (in one chat, or all) and
+asks your phone for the history around them again. The phone sends it to wacli
 only; nothing goes to the chat. Lines wacli can show are filled in, and each
-message's type is reported. Album headers are empty lines in iPhone exports
-too, so they stay empty. The phone must be online.`,
+message's type is reported and remembered, so a line is asked about once
+(--again asks about all of them). Album headers are empty lines in iPhone
+exports too, so they stay empty.
+
+A running sync does this by itself, a few requests at a time, whenever
+WhatsApp is in use on the phone: it answers only while open.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := execute(f, r)
-			if res == nil && err != nil {
+			if err != nil {
 				return err
 			}
 			if f.asJSON {
-				if werr := out.WriteJSON(os.Stdout, res); werr != nil {
-					return werr
-				}
-				return err
+				return out.WriteJSON(os.Stdout, res)
 			}
 			data, _ := json.Marshal(res)
-			var items []archiver.RefetchItem
-			_ = json.Unmarshal(data, &items)
+			var rr refetchReply
+			_ = json.Unmarshal(data, &rr)
 			kinds := map[string]int{}
 			filled := 0
-			for _, it := range items {
+			for _, it := range rr.Items {
 				kind := it.Kind
 				if kind == "" {
 					kind = "no answer"
@@ -204,41 +205,53 @@ too, so they stay empty. The phone must be online.`,
 				kinds[kind]++
 				if it.Filled {
 					filled++
-				}
-				if it.Filled {
 					kind += " (filled in)"
 				}
 				if it.Kind != "album" {
 					fmt.Printf("%s  %s  %s: %s\n", it.Time.Format("2006-01-02 15:04"), it.Folder, it.ID, kind)
 				}
 			}
-			fmt.Printf("%d empty lines, %d filled in:", len(items), filled)
+			fmt.Printf("%d empty lines checked, %d filled in, %d left to check.", len(rr.Items), filled, rr.Left)
 			for _, k := range slices.Sorted(maps.Keys(kinds)) {
-				fmt.Printf(" %s %d,", k, kinds[k])
+				fmt.Printf(" %s: %d.", k, kinds[k])
 			}
 			fmt.Println()
-			return err
+			if rr.Stopped != "" {
+				fmt.Fprintln(os.Stderr, "Stopped: "+rr.Stopped)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&r.Chat, "chat", "", "chat JID, phone number or name (default: all chats)")
-	cmd.Flags().IntVar(&r.Count, "count", 20, "messages per request")
-	cmd.Flags().DurationVar(&r.Wait, "wait", time.Minute, "how long to wait for the phone's answers to each request")
+	cmd.Flags().BoolVar(&r.Again, "again", false, "ask about lines already checked too")
+	cmd.Flags().IntVar(&r.Count, "count", 50, "messages per request")
+	cmd.Flags().DurationVar(&r.Wait, "wait", 30*time.Second, "how long to wait for the phone's answer to each request")
 	return cmd
 }
 
+// refetchReply is a Refetch result, and why it stopped early if it did.
+type refetchReply struct {
+	archiver.RefetchResult
+	Stopped string `json:"stopped,omitempty"`
+}
+
 func doRefetch(ctx context.Context, s *session, r request) (any, error) {
-	jid := ""
+	o := archiver.RefetchOptions{Count: r.Count, Wait: r.Wait, Again: r.Again}
 	if r.Chat != "" {
-		j, err := resolveChat(s.ar, r.Chat, s.lidOf(ctx))
+		jid, err := resolveChat(s.ar, r.Chat, s.lidOf(ctx))
 		if err != nil {
 			return nil, err
 		}
-		jid = j.String()
+		o.Chat = jid.String()
 	}
 	if err := s.waitLoggedIn(ctx); err != nil {
 		return nil, err
 	}
-	return s.arc.Refetch(ctx, jid, r.Count, r.Wait)
+	res, err := s.arc.Refetch(ctx, o)
+	if errors.Is(err, archiver.ErrPhoneQuiet) {
+		return refetchReply{res, err.Error()}, nil
+	}
+	return refetchReply{RefetchResult: res}, err
 }
 
 func newDoctorCmd(f *rootFlags) *cobra.Command {
@@ -281,6 +294,9 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				}
 				info["status_updated"] = st.UpdatedAt.Format(time.RFC3339)
 				info["pending_media"] = st.PendingMedia
+				if running {
+					info["empty_lines_to_check"] = st.EmptyLines
+				}
 				if st.Halted != "" && !running {
 					problems = append(problems, "sync stopped at "+st.HaltedAt.Format(time.RFC3339)+": "+st.Halted)
 				}
@@ -315,7 +331,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				return out.WriteJSON(os.Stdout, info)
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			for _, k := range []string{"archive", "store", "linked", "sync_running", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "date_format", "agent_skill"} {
+			for _, k := range []string{"archive", "store", "linked", "sync_running", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "empty_lines_to_check", "date_format", "agent_skill"} {
 				if v, ok := info[k]; ok {
 					fmt.Fprintf(w, "%s\t%v\n", strings.ToUpper(k), v)
 				}

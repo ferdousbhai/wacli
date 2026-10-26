@@ -40,13 +40,17 @@ type Archiver struct {
 	closed   bool
 
 	added        atomic.Int64
+	onDemand     atomic.Int64 // on-demand history replies received
 	lastActivity atomic.Int64 // when something was last archived; 0: not yet
 	started      time.Time
 	namesChanged chan struct{}
+	phoneSeen    chan struct{} // WhatsApp is open on the phone
+	refetchRun   sync.Mutex    // one Refetch at a time
+	checked      *checkedLines
 
 	mu          sync.Mutex
-	backfill    map[string]chan historyBatch           // chat JID → backfill waiting for a page
-	refetch     map[types.MessageID]chan refetchAnswer // resend request → Refetch waiting
+	backfill    map[string]chan historyBatch  // chat JID → backfill waiting for a page
+	refetch     map[string]chan refetchAnswer // message ID → Refetch waiting for it
 	seenPayload map[string]bool
 	namesWanted map[string]bool // chats flagged NeedsNames since a refresh began
 }
@@ -69,8 +73,10 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		ctx:          context.Background(),
 		cancel:       func() {},
 		namesChanged: make(chan struct{}, 1),
+		phoneSeen:    make(chan struct{}, 1),
+		checked:      loadCheckedLines(ar.Root(), logf),
 		backfill:     map[string]chan historyBatch{},
-		refetch:      map[types.MessageID]chan refetchAnswer{},
+		refetch:      map[string]chan refetchAnswer{},
 		seenPayload:  map[string]bool{},
 		namesWanted:  map[string]bool{},
 	}
@@ -91,6 +97,7 @@ func (a *Archiver) Start(ctx context.Context) {
 	a.background(a.reportStatus)
 	a.background(a.refreshNamesLoop)
 	a.background(a.trimLoop)
+	a.background(a.refetchLoop)
 }
 
 // trimLoop unloads chats nobody touched for a while, so the sync process
@@ -164,10 +171,14 @@ func (a *Archiver) handle(evt any) {
 	switch v := evt.(type) {
 	case *events.Message:
 		a.names.notePush(v.Info.Sender.String(), v.Info.PushName)
-		if v.UnavailableRequestID != "" && a.refetched(ctx, v) {
-			return
+		if v.Info.IsFromMe && v.Info.Sender.Device == 0 {
+			a.phoneActive() // sent from the phone just now
 		}
 		a.archiveMessage(ctx, nil, wa.ParseLiveMessage(v), "")
+	case *events.Receipt:
+		if v.IsFromMe && v.Sender.Device == 0 && (v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf) {
+			a.phoneActive() // a chat read on the phone just now
+		}
 	case *events.HistorySync:
 		a.archiveHistory(ctx, v.Data)
 	case *events.PushName:
@@ -228,6 +239,12 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 	before := a.added.Load()
 	b := &batch{held: map[string]*archive.Chat{}}
 	pages := map[string]historyBatch{}
+	type wanted struct {
+		ch     chan refetchAnswer
+		chatID string
+		web    *waWeb.WebMessageInfo
+	}
+	var refetched []wanted
 	for _, conv := range data.GetConversations() {
 		chatID := strings.TrimSpace(conv.GetID())
 		if chatID == "" {
@@ -246,6 +263,11 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		if hint == "" {
 			hint = conv.GetDisplayName()
 		}
+		if msgs := conv.GetMessages(); debug && data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND && len(msgs) > 0 {
+			first, last := msgs[0].GetMessage(), msgs[len(msgs)-1].GetMessage()
+			a.logf("debug: on-demand history for %s: %d messages, %s %d … %s %d", chatID, len(msgs),
+				first.GetKey().GetID(), first.GetMessageTimestamp(), last.GetKey().GetID(), last.GetMessageTimestamp())
+		}
 		var page historyBatch
 		for _, m := range conv.GetMessages() {
 			web := m.GetMessage()
@@ -253,6 +275,9 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 				continue
 			}
 			a.archiveWeb(ctx, b, chatID, hint, web)
+			if ch := a.refetchWanted(web.GetKey().GetID()); ch != nil {
+				refetched = append(refetched, wanted{ch, chatID, web})
+			}
 			// Pages come in the phone's storage order, which is not always
 			// time order; the next page starts after the last message here.
 			key := web.GetKey()
@@ -270,7 +295,11 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		}
 	}
 	a.media.flush() // downloads queued by this chunk, before it is acknowledged
+	for _, w := range refetched {
+		a.answerRefetch(ctx, w.ch, w.chatID, w.web)
+	}
 	if data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+		a.onDemand.Add(1)
 		// A waiting backfill reads the chat, so tell it only once written.
 		for chatID, page := range pages {
 			a.deliverBackfill(ctx, chatID, page)

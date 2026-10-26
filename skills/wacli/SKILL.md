@@ -46,6 +46,10 @@ having with you.
 
 - `wacli backfill --chat <name|number|JID>` asks the phone for older messages
   (the phone must be online).
+- A line with nothing after the sender's name is usually an album header (the
+  photos follow as their own lines; iPhone exports show it the same way).
+  The sync asks the phone about other empty lines by itself while WhatsApp is
+  in use there; `wacli refetch [--chat …]` does it now and reports each type.
 - Phones don't give linked devices everything. If messages are missing, ask the
   user to export the chat on their phone (with media) and run
   `wacli import "<export.zip>" [--chat <JID>]`; importing twice is safe.

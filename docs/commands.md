@@ -58,16 +58,23 @@ hand linked devices everything; for the rest, use `import`.
 ## refetch
 
 ```bash
-wacli refetch [--chat <name|number|JID>] [--count 20] [--wait 1m]
+wacli refetch [--chat <name|number|JID>] [--again] [--count 50] [--wait 30s]
 ```
 
-Finds every line with nothing after the sender's name and asks the phone for
-its copy of each message (between your phone and wacli only; nothing is sent to
-the chat). Lines wacli can show are filled in, and every message's type is
-reported, e.g. `album`, `deleted`, or the WhatsApp field name of a type wacli
-can't show yet. Album headers stay empty: iPhone exports show them that way.
-Messages are asked for `--count` at a time. The sync also logs every new empty
-line that isn't an album, with its type.
+Finds lines with nothing after the sender's name and asks the phone for the
+history around them again (between your phone and wacli only; nothing is sent
+to the chat). Lines wacli can show are filled in, and every message's type is
+reported, e.g. `album`, `deleted`, `not on phone`, or the WhatsApp field name of
+a type wacli can't show yet. Types are remembered in `.wacli/refetched.json`, so
+a line is asked about once; `--again` asks about all of them. Album headers stay
+empty: iPhone exports show them that way. Messages missing from the archive
+that come along are added, as with `backfill`.
+
+You rarely need to run it: a running sync does the same by itself, five
+requests at a time, whenever WhatsApp is in use on the phone (a message sent or
+a chat read there). WhatsApp answers only while it's open on the phone, so
+nobody has to keep it open for this. `wacli doctor` shows how many lines are
+left. The sync also logs every new empty line that isn't an album, with its type.
 
 ## import
 

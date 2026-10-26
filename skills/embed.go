@@ -11,7 +11,7 @@ var Wacli []byte
 // Revision numbers the skill's content. An installed skill is refreshed
 // only by a wacli carrying a higher revision, so an older binary never
 // downgrades it. Bump it with every change to SKILL.md (a test checks).
-const Revision = 6
+const Revision = 7
 
 // sha256 of the SKILL.md that Revision describes.
-const revisionHash = "f1baa463ace070863b2b43c404736fad7a712f3205d06d32ac1f7422b1b7b502"
+const revisionHash = "554d686bbd3fda4b1cd2229c3fc156570bec14a251bd075b3610972bccbcb575"

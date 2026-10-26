@@ -1,16 +1,21 @@
 package archiver
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ferdousbhai/wacli/internal/archive"
+	"github.com/ferdousbhai/wacli/internal/fsutil"
 	"github.com/ferdousbhai/wacli/internal/wa"
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
 )
 
 // RefetchItem is one empty line and what the phone said it is.
@@ -23,163 +28,331 @@ type RefetchItem struct {
 	Filled bool      `json:"filled"` // the line shows something now
 }
 
+type RefetchOptions struct {
+	Chat        string // one chat's JID; "" for all
+	Count       int    // messages per request
+	Wait        time.Duration
+	MaxRequests int  // 0: no limit; with a limit, the first silence ends the run
+	Again       bool // ask about lines already checked too
+}
+
+type RefetchResult struct {
+	Items []RefetchItem `json:"items"` // the lines asked about
+	Left  int           `json:"left"`  // empty lines still to check
+}
+
 type refetchAnswer struct {
 	id, kind string
 	filled   bool
 }
 
-// Refetch asks the phone to resend the messages archived as empty lines (in
-// one chat, or all when chatJID is ""), fills in what wacli can show, and
-// reports each message's type. Albums are empty lines in exports too; asking
-// for them confirms what they are.
-func (a *Archiver) Refetch(ctx context.Context, chatJID string, perRequest int, wait time.Duration) ([]RefetchItem, error) {
-	var items []RefetchItem
-	var keys []wa.MessageKey
+// refetchJob is one request: the history before anchor, which holds want.
+type refetchJob struct {
+	c      *archive.Chat
+	folder string
+	anchor archive.Row
+	want   []archive.Row
+}
+
+// Refetch asks the phone again for messages archived as empty lines, fills
+// in what wacli can show, and records each one's type in refetched.json so
+// it isn't asked about again. Phones ignore requests to resend a message a
+// linked device already has, so it asks for the history just before the
+// message after each empty line, which includes it. Albums are empty lines in
+// exports too; asking for them confirms what they are.
+func (a *Archiver) Refetch(ctx context.Context, o RefetchOptions) (res RefetchResult, err error) {
+	a.refetchRun.Lock()
+	defer a.refetchRun.Unlock()
+	if o.Count <= 0 {
+		o.Count = 50
+	}
+	jobs, err := a.refetchJobs(o)
+	if err != nil {
+		return res, err
+	}
+	defer func() {
+		for _, j := range jobs {
+			res.Left += len(j.want)
+		}
+		if o.Chat == "" && !o.Again {
+			a.status.setUncheckedLines(res.Left)
+		}
+	}()
+	silent, sent := 0, 0 // silent: requests in a row the phone didn't reply to at all
+	for len(jobs) > 0 && (o.MaxRequests <= 0 || sent < o.MaxRequests) {
+		j := jobs[0]
+		sent++
+		got, err := a.requestAround(ctx, j, o.Count, o.Wait)
+		if errors.Is(err, ErrNoAnswer) {
+			// WhatsApp stops answering soon after the phone locks: stop
+			// rather than mark lines unanswered one timeout at a time.
+			if silent++; silent >= 3 || o.MaxRequests > 0 {
+				return res, ErrPhoneQuiet
+			}
+			jobs = append(jobs[1:], j) // tried again last
+			continue
+		}
+		silent = 0
+		jobs = jobs[1:]
+		for _, row := range j.want {
+			item := RefetchItem{Folder: j.folder, Chat: j.c.JID(), ID: row.ID, Time: time.Unix(row.TS, 0)}
+			ans, ok := got[row.ID]
+			if !ok && errors.Is(err, errNotSent) {
+				ans = refetchAnswer{id: row.ID, kind: "not on phone"}
+			}
+			if ans.kind != "" {
+				item.Kind, item.Filled = ans.kind, ans.filled
+				a.checked.note(j.c.JID(), row.ID, ans.kind)
+			}
+			res.Items = append(res.Items, item)
+		}
+		a.checked.save(a.ar.TmpDir(), a.logf)
+		if err != nil && !errors.Is(err, errNotSent) {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// refetchJobs groups the empty lines not checked yet into requests, newest
+// first: each covers the lines up to count messages before its anchor.
+func (a *Archiver) refetchJobs(o RefetchOptions) ([]refetchJob, error) {
+	var jobs []refetchJob
 	for _, info := range a.ar.Chats() {
-		if chatJID != "" && info.JID != chatJID {
+		if o.Chat != "" && info.JID != o.Chat {
 			continue
 		}
 		c, err := a.ar.Chat(info.JID)
 		if err != nil {
 			return nil, err
 		}
-		chat, err := types.ParseJID(info.JID)
-		if err != nil {
-			continue
-		}
-		for _, row := range c.Rows() {
-			if strings.Contains(row.ID, ":") { // wacli's own IDs: the phone doesn't know them
-				continue
+		rows := c.Rows()
+		var blanks []int // positions, oldest first
+		for i, row := range rows {
+			if strings.Contains(row.ID, ":") || !o.Again && a.checked.has(info.JID, row.ID) {
+				continue // ":" IDs are wacli's own; the phone doesn't know them
 			}
-			if e, ok := c.Get(row.ID); !ok || !blank(e) {
-				continue
-			}
-			sender, _ := types.ParseJID(row.Sender)
-			items = append(items, RefetchItem{Folder: info.Folder, Chat: info.JID, ID: row.ID, Time: time.Unix(row.TS, 0)})
-			for _, jid := range a.chatJIDs(ctx, chat) {
-				keys = append(keys, wa.MessageKey{Chat: jid, Sender: sender, ID: row.ID, FromMe: row.FromMe})
+			if e, ok := c.Get(row.ID); ok && blank(e) {
+				blanks = append(blanks, i)
 			}
 		}
-	}
-	if perRequest <= 0 {
-		perRequest = 20
-	}
-	answers := map[string]refetchAnswer{}
-	for start := 0; start < len(keys); start += perRequest {
-		chunk := keys[start:min(start+perRequest, len(keys))]
-		got, err := a.requestResend(ctx, chunk, wait)
-		for id, ans := range got {
-			answers[id] = ans
-		}
-		if err != nil {
-			return fill(items, answers), err
-		}
-	}
-	return fill(items, answers), nil
-}
-
-func fill(items []RefetchItem, answers map[string]refetchAnswer) []RefetchItem {
-	for i := range items {
-		if ans, ok := answers[items[i].ID]; ok {
-			items[i].Kind, items[i].Filled = ans.kind, ans.filled
+		for len(blanks) > 0 {
+			last := blanks[len(blanks)-1]
+			anchor, ok := anchorAfter(rows, last)
+			if !ok {
+				// Nothing newer to anchor on: just after it in time, by an ID
+				// the phone doesn't know.
+				anchor = archive.Row{ID: "3EB0" + strings.ToUpper(rows[last].ID), TS: rows[last].TS + 1, FromMe: true}
+			}
+			j := refetchJob{c: c, folder: info.Folder, anchor: anchor}
+			for len(blanks) > 0 && blanks[len(blanks)-1] > last-o.Count {
+				j.want = append(j.want, rows[blanks[len(blanks)-1]])
+				blanks = blanks[:len(blanks)-1]
+			}
+			jobs = append(jobs, j)
 		}
 	}
-	return items
+	return jobs, nil
 }
 
-// chatJIDs is jid and, for a person, their other address: the phone keeps a
-// chat under only one of the two.
-func (a *Archiver) chatJIDs(ctx context.Context, jid types.JID) []types.JID {
-	var alt types.JID
-	switch jid.Server {
-	case types.DefaultUserServer:
-		alt = a.wa.ResolvePNToLID(ctx, jid)
-	case types.HiddenUserServer:
-		alt = a.wa.ResolveLIDToPN(ctx, jid)
+// anchorAfter is the first message after position i the phone knows.
+func anchorAfter(rows []archive.Row, i int) (archive.Row, bool) {
+	for _, r := range rows[i+1:] {
+		if !strings.Contains(r.ID, ":") {
+			return r, true
+		}
 	}
-	if alt.IsEmpty() || alt == jid {
-		return []types.JID{jid}
-	}
-	return []types.JID{jid, alt}
+	return archive.Row{}, false
 }
 
-// requestResend sends one request and collects answers until every message
-// in it has one or the phone has been quiet for wait.
-func (a *Archiver) requestResend(ctx context.Context, keys []wa.MessageKey, wait time.Duration) (map[string]refetchAnswer, error) {
-	want := map[string]bool{}
-	for _, k := range keys {
-		want[k.ID] = true
+// requestAround asks for the history before j.anchor and collects the
+// answers for j.want, trying the chat's other address when the first is
+// silent. The messages are archived by archiveHistory as they arrive.
+func (a *Archiver) requestAround(ctx context.Context, j refetchJob, count int, wait time.Duration) (map[string]refetchAnswer, error) {
+	chat, err := types.ParseJID(j.c.JID())
+	if err != nil {
+		return nil, err
 	}
-	ch := make(chan refetchAnswer, len(keys))
-	var reqID types.MessageID
+	ch := make(chan refetchAnswer, len(j.want))
+	a.mu.Lock()
+	for _, row := range j.want {
+		a.refetch[row.ID] = ch
+	}
+	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
-		delete(a.refetch, reqID)
+		for _, row := range j.want {
+			delete(a.refetch, row.ID)
+		}
 		a.mu.Unlock()
 	}()
-	err := a.wa.RequestResend(ctx, keys, func(id types.MessageID) {
-		reqID = id
-		a.mu.Lock()
-		a.refetch[id] = ch
-		a.mu.Unlock()
-	})
+	sender, _ := types.ParseJID(j.anchor.Sender)
 	got := map[string]refetchAnswer{}
-	if err != nil {
-		return got, err
-	}
-	for len(got) < len(want) {
-		select {
-		case <-ctx.Done():
-			return got, ctx.Err()
-		case ans := <-ch:
-			if want[ans.id] {
-				got[ans.id] = ans
-			}
-		case <-time.After(wait):
-			if len(got) == 0 {
-				return got, ErrNoResend
-			}
-			return got, nil
+	for _, target := range a.chatJIDs(ctx, chat) {
+		info := types.MessageInfo{
+			MessageSource: types.MessageSource{Chat: target, Sender: sender, IsFromMe: j.anchor.FromMe, IsGroup: target.Server == types.GroupServer},
+			ID:            j.anchor.ID,
+			Timestamp:     time.Unix(j.anchor.TS, 0),
+		}
+		replies := a.onDemand.Load()
+		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, info, count); err != nil {
+			return got, err
+		}
+		replied, err := a.collect(ctx, ch, got, len(j.want), replies, wait)
+		if err != nil || len(got) == len(j.want) {
+			return got, err
+		}
+		if replied {
+			// The reply is in and archived: what it lacked, the phone doesn't have.
+			return got, errNotSent
 		}
 	}
-	return got, nil
+	return got, ErrNoAnswer
 }
 
-// ErrNoResend is a resend request the phone didn't answer at all.
-var ErrNoResend = errors.New("phone did not answer the resend request (is it online?)")
-
-// refetched archives the phone's answer to a Refetch and reports it. It
-// returns false for answers to requests wacli didn't make here.
-func (a *Archiver) refetched(ctx context.Context, v *events.Message) bool {
-	a.mu.Lock()
-	ch, ok := a.refetch[v.UnavailableRequestID]
-	a.mu.Unlock()
-	if !ok {
-		return false
+// collect gathers answers into got until it has want of them, a reply to the
+// request (counted by onDemand past replies) is in, or wait passes. Answers
+// are sent before a reply is counted, so none is left behind.
+func (a *Archiver) collect(ctx context.Context, ch chan refetchAnswer, got map[string]refetchAnswer, want int, replies int64, wait time.Duration) (replied bool, err error) {
+	deadline := time.After(wait)
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for len(got) < want {
+		select {
+		case <-ctx.Done():
+			return replied, ctx.Err()
+		case ans := <-ch:
+			got[ans.id] = ans
+		case <-tick.C:
+			if a.onDemand.Load() == replies {
+				continue
+			}
+			for {
+				select {
+				case ans := <-ch:
+					got[ans.id] = ans
+				default:
+					return true, nil
+				}
+			}
+		case <-deadline:
+			return false, nil
+		}
 	}
-	web := v.SourceWebMsg
-	pm := wa.ParseLiveMessage(v)
-	kind := describe(pm)
+	return a.onDemand.Load() != replies, nil
+}
+
+// errNotSent is a reply to a Refetch request without the messages asked for:
+// the phone no longer has them.
+var errNotSent = errors.New("the phone's reply didn't include the messages")
+
+// ErrPhoneQuiet ends a Refetch whose requests the phone stopped answering.
+var ErrPhoneQuiet = errors.New("the phone stopped answering (WhatsApp pauses when the phone locks); the sync carries on whenever you use WhatsApp on the phone")
+
+// chatJIDs is jid and, for a person, their other address: the phone keeps a
+// chat under only one of the two, these days mostly the hidden one, so that
+// is tried first.
+func (a *Archiver) chatJIDs(ctx context.Context, jid types.JID) []types.JID {
+	switch jid.Server {
+	case types.DefaultUserServer:
+		if lid := a.wa.ResolvePNToLID(ctx, jid); !lid.IsEmpty() && lid != jid {
+			return []types.JID{lid, jid}
+		}
+	case types.HiddenUserServer:
+		if pn := a.wa.ResolveLIDToPN(ctx, jid); !pn.IsEmpty() && pn != jid {
+			return []types.JID{jid, pn}
+		}
+	}
+	return []types.JID{jid}
+}
+
+// phoneActive notes a sign that WhatsApp is open on the phone (a message
+// sent or read there), when it answers requests at once and without asking
+// the user to open it.
+func (a *Archiver) phoneActive() {
+	select {
+	case a.phoneSeen <- struct{}{}:
+	default:
+	}
+}
+
+// refetchLoop checks empty lines a few at a time while the phone is in use,
+// so the backlog clears with no one having to keep WhatsApp open for it.
+func (a *Archiver) refetchLoop(ctx context.Context) {
+	const perRound, pause = 5, 2 * time.Minute
+	jobs, err := a.refetchJobs(RefetchOptions{Count: 50})
+	if err != nil {
+		a.logf("warning: finding empty lines: %v", err)
+	}
+	left := 0
+	for _, j := range jobs {
+		left += len(j.want)
+	}
+	a.status.setUncheckedLines(left)
+	if left == 0 {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.phoneSeen:
+		}
+		res, err := a.Refetch(ctx, RefetchOptions{MaxRequests: perRound, Wait: 20 * time.Second})
+		if len(res.Items) > 0 || err != nil && !errors.Is(err, ErrPhoneQuiet) {
+			a.logf("refetch: checked %d empty lines, %d left (%v)", len(res.Items), res.Left, err)
+		}
+		if res.Left == 0 && err == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		select { // a sign seen during the pause is stale
+		case <-a.phoneSeen:
+		default:
+		}
+	}
+}
+
+// refetchWanted returns the channel of a Refetch waiting for message id.
+func (a *Archiver) refetchWanted(id string) chan refetchAnswer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.refetch[id]
+}
+
+// answerRefetch tells a waiting Refetch what a message from history is and
+// whether its line shows something now. Called once the chunk is written.
+func (a *Archiver) answerRefetch(ctx context.Context, ch chan refetchAnswer, chatID string, web *waWeb.WebMessageInfo) {
+	id := web.GetKey().GetID()
+	kind := webKind(chatID, web)
+	filled := false
+	if jid, err := types.ParseJID(chatID); err == nil {
+		if c, err := a.knownChat(ctx, jid); err == nil && c != nil {
+			e, ok := c.Get(id)
+			filled = ok && !blank(e)
+		}
+	}
+	a.logf("refetched %s in %s: %s (filled: %v)", id, chatID, kind, filled)
+	select {
+	case ch <- refetchAnswer{id: id, kind: kind, filled: filled}:
+	default:
+	}
+}
+
+func webKind(chatID string, web *waWeb.WebMessageInfo) string {
 	switch t := web.GetMessageStubType(); {
 	case t == waWeb.WebMessageInfo_REVOKE || t == waWeb.WebMessageInfo_ADMIN_REVOKE:
-		kind = "deleted"
-		a.archiveWeb(ctx, nil, v.Info.Chat.String(), "", web)
+		return "deleted"
 	case t != 0:
-		kind = "notice: " + strings.ToLower(t.String()) // nothing to fill in
-	default:
-		a.archiveMessage(ctx, nil, pm, "")
+		return "notice: " + strings.ToLower(t.String())
+	case web.GetMessage() == nil:
+		return "no content"
 	}
-	filled := false
-	if c, err := a.knownChat(ctx, v.Info.Chat); err == nil && c != nil {
-		e, ok := c.Get(v.Info.ID)
-		filled = ok && !blank(e)
-	}
-	a.logf("resent %s in %s: %s (filled: %v)", v.Info.ID, v.Info.Chat, kind, filled)
-	select {
-	case ch <- refetchAnswer{id: v.Info.ID, kind: kind, filled: filled}:
-	default:
-	}
-	return true
+	return describe(wa.ParseHistoryMessage(chatID, web))
 }
 
 // blank reports a line with nothing after the sender's name.
@@ -212,4 +385,59 @@ func describe(pm wa.ParsedMessage) string {
 		return pm.UnhandledPayload
 	}
 	return "no content"
+}
+
+// checkedLines is .wacli/refetched.json: per chat, the empty lines whose
+// type the phone has told (album, not on phone, a type wacli can't show),
+// so they aren't asked about again.
+type checkedLines struct {
+	path  string
+	mu    sync.Mutex
+	kinds map[string]map[string]string // chat JID → message ID → kind
+	dirty bool
+}
+
+func loadCheckedLines(root string, logf func(string, ...any)) *checkedLines {
+	l := &checkedLines{path: filepath.Join(root, ".wacli", "refetched.json"), kinds: map[string]map[string]string{}}
+	data, err := os.ReadFile(l.path)
+	if err == nil {
+		if err := json.Unmarshal(data, &l.kinds); err != nil {
+			logf("warning: %s unreadable (%v); empty lines will be checked again", l.path, err)
+			l.kinds = map[string]map[string]string{}
+		}
+	}
+	return l
+}
+
+func (l *checkedLines) has(chat, id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.kinds[chat][id]
+	return ok
+}
+
+func (l *checkedLines) note(chat, id, kind string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.kinds[chat] == nil {
+		l.kinds[chat] = map[string]string{}
+	}
+	l.kinds[chat][id] = kind
+	l.dirty = true
+}
+
+func (l *checkedLines) save(tmpDir string, logf func(string, ...any)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.dirty {
+		return
+	}
+	err := fsutil.WriteAtomic(l.path, tmpDir, 0o600, func(w *bufio.Writer) error {
+		return json.NewEncoder(w).Encode(l.kinds)
+	})
+	if err != nil {
+		logf("warning: saving %s: %v", l.path, err)
+		return
+	}
+	l.dirty = false
 }

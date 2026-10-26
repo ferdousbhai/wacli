@@ -26,6 +26,7 @@ type request struct {
 
 	Chat     string        `json:"chat,omitempty"`
 	All      bool          `json:"all,omitempty"`
+	Again    bool          `json:"again,omitempty"`
 	Count    int           `json:"count,omitempty"`
 	Requests int           `json:"requests,omitempty"`
 	Wait     time.Duration `json:"wait,omitempty"`

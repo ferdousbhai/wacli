@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure
-- `cmd/wacli/`: CLI (auth, sync, backfill, import, chats, send, doctor, logout, skill) and the IPC that lets `send`/`backfill`/`import` run inside a running `sync --follow`.
+- `cmd/wacli/`: CLI (auth, sync, backfill, refetch, import, chats, send, doctor, logout, skill) and the IPC that lets `send`/`backfill`/`refetch`/`import` run inside a running `sync --follow`.
 - `internal/archive/`: the data. Chat folders shaped like iPhone exports (`_chat.txt` + media), the iOS line format (render/parse), per-chat ID index, holds/flushes, repair, import merge. No whatsmeow dependency.
 - `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, backfill paging, name refresh, status.json.
 - `internal/wa/`: whatsmeow client wrapper and message parsing (only what the archiver and send use).
@@ -10,7 +10,7 @@
 
 ## Key Architectural Facts
 - **The folders are the data.** `~/WhatsApp/WhatsApp Chat - <name>/_chat.txt` must stay byte-compatible with an iPhone export; `internal/archive/testdata` and `WACLI_REFERENCE_EXPORT` (a real export, never committed) check that. Never add markers or IDs to `_chat.txt`.
-- **Bookkeeping lives in `<archive>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `status.json`. `session.db` (whatsmeow) is the only database.
+- **Bookkeeping lives in `<archive>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `refetched.json`, `status.json`. `session.db` (whatsmeow) is the only database.
 - **Writes**: in-memory entries are authoritative. Newest message = two appends; anything else, or any failure, rewrites both files from memory (temp file + rename). History chunks `Hold` the chats they touch; other writers `Flush` before acknowledging.
 - **Times** use the computer's time zone at write time. Don't pin a zone.
 - **Backfill** follows the phone's page order (last message of each page), not timestamps.

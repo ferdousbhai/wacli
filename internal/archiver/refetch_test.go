@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.mau.fi/whatsmeow/proto/waCommon"
+	"github.com/ferdousbhai/wacli/internal/archive"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/proto/waWeb"
@@ -13,22 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// resent is the phone's answer to a resend request, as whatsmeow delivers it.
-func resent(req types.MessageID, chat, sender, id string, fromMe bool, ts int64, msg *waE2E.Message, stub waWeb.WebMessageInfo_StubType) *events.Message {
-	evt := live(chat, sender, id, fromMe, ts, msg)
-	evt.UnavailableRequestID = req
-	evt.SourceWebMsg = &waWeb.WebMessageInfo{
-		Key:              &waCommon.MessageKey{RemoteJID: proto.String(chat), FromMe: proto.Bool(fromMe), ID: proto.String(id)},
-		MessageTimestamp: proto.Uint64(uint64(ts)),
-		Message:          msg,
-	}
-	if stub != 0 {
-		evt.SourceWebMsg.MessageStubType = stub.Enum()
-	}
-	return evt
-}
-
-func TestRefetchAnswersFillEmptyLinesAndNameTheirType(t *testing.T) {
+func TestRefetchedHistoryFillsEmptyLinesAndNamesTheirType(t *testing.T) {
 	a, ar := newTestArchiver(t)
 	unknown := &waE2E.Message{RequestPhoneNumberMessage: &waE2E.RequestPhoneNumberMessage{}}
 	album := &waE2E.Message{AlbumMessage: &waE2E.AlbumMessage{ExpectedImageCount: proto.Uint32(2)}}
@@ -36,6 +21,7 @@ func TestRefetchAnswersFillEmptyLinesAndNameTheirType(t *testing.T) {
 		web(dana, "U1", "", false, t0, unknown),
 		web(dana, "A1", "", false, t0+10, album),
 		web(dana, "D1", "", false, t0+20, unknown),
+		web(dana, "N1", "", false, t0+30, text("after")),
 	))
 	c, _ := ar.Chat(dana)
 	for _, id := range []string{"U1", "A1", "D1"} {
@@ -45,10 +31,16 @@ func TestRefetchAnswersFillEmptyLinesAndNameTheirType(t *testing.T) {
 	}
 
 	ch := make(chan refetchAnswer, 8)
-	a.refetch["REQ"] = ch
-	a.handle(resent("REQ", dana, dana, "U1", false, t0, text("Now readable"), 0))
-	a.handle(resent("REQ", dana, dana, "A1", false, t0+10, album, 0))
-	a.handle(resent("REQ", dana, dana, "D1", false, t0+20, nil, waWeb.WebMessageInfo_REVOKE))
+	for _, id := range []string{"U1", "A1", "D1"} {
+		a.refetch[id] = ch
+	}
+	deleted := web(dana, "D1", "", false, t0+20, nil)
+	deleted.Message.MessageStubType = waWeb.WebMessageInfo_REVOKE.Enum()
+	a.handle(history(waHistorySync.HistorySync_ON_DEMAND, dana, "Dana",
+		web(dana, "U1", "", false, t0, text("Now readable")),
+		web(dana, "A1", "", false, t0+10, album),
+		deleted,
+	))
 	got := map[string]refetchAnswer{}
 	for range 3 {
 		ans := <-ch
@@ -69,10 +61,69 @@ func TestRefetchAnswersFillEmptyLinesAndNameTheirType(t *testing.T) {
 	}
 }
 
-func TestResendAnswerToSomeoneElsesRequestIsArchivedAsUsual(t *testing.T) {
+func TestAnchorAfterSkipsWaclisOwnIDs(t *testing.T) {
+	rows := []archive.Row{{ID: "E1"}, {ID: "wacli:x"}, {ID: "import:y"}, {ID: "M2"}}
+	if r, ok := anchorAfter(rows, 0); !ok || r.ID != "M2" {
+		t.Fatalf("anchor %v %v", r, ok)
+	}
+	if _, ok := anchorAfter(rows, 3); ok {
+		t.Fatal("the newest message has nothing after it")
+	}
+}
+
+func TestCheckedLinesAreRememberedAndNotAskedAgain(t *testing.T) {
 	a, ar := newTestArchiver(t)
-	a.handle(resent("NOT-OURS", dana, dana, "M1", false, t0, text("Hello"), 0))
-	if file := chatFile(t, ar, dana); !strings.Contains(file, "Dana Putri: Hello\r\n") {
-		t.Fatalf("message lost:\n%q", file)
+	album := &waE2E.Message{AlbumMessage: &waE2E.AlbumMessage{ExpectedImageCount: proto.Uint32(2)}}
+	a.handle(history(waHistorySync.HistorySync_INITIAL_BOOTSTRAP, dana, "Dana",
+		web(dana, "A1", "", false, t0, album),
+		web(dana, "A2", "", false, t0+10, album),
+		web(dana, "N1", "", false, t0+20, text("after")),
+	))
+	jobs, err := a.refetchJobs(RefetchOptions{Count: 50})
+	if err != nil || len(jobs) != 1 || len(jobs[0].want) != 2 || jobs[0].anchor.ID != "N1" {
+		t.Fatalf("jobs %+v %v", jobs, err)
+	}
+	a.checked.note(dana, "A1", "album")
+	a.checked.save(ar.TmpDir(), t.Logf)
+
+	again := loadCheckedLines(ar.Root(), t.Logf) // after a restart
+	if !again.has(dana, "A1") || again.has(dana, "A2") {
+		t.Fatalf("record %v", again.kinds)
+	}
+	a.checked = again
+	jobs, _ = a.refetchJobs(RefetchOptions{Count: 50})
+	if len(jobs) != 1 || len(jobs[0].want) != 1 || jobs[0].want[0].ID != "A2" {
+		t.Fatalf("checked line asked again: %+v", jobs)
+	}
+	if jobs, _ = a.refetchJobs(RefetchOptions{Count: 50, Again: true}); len(jobs[0].want) != 2 {
+		t.Fatalf("--again: %+v", jobs)
+	}
+}
+
+func TestPhoneUseStartsARefetchRound(t *testing.T) {
+	a, _ := newTestArchiver(t)
+	signalled := func() bool {
+		select {
+		case <-a.phoneSeen:
+			return true
+		default:
+			return false
+		}
+	}
+	other := live(dana, me, "M1", true, t0, text("from the desktop app"))
+	other.Info.Sender.Device = 3
+	a.handle(other)
+	a.handle(live(dana, dana, "M2", false, t0+1, text("from Dana")))
+	if signalled() {
+		t.Fatal("not the phone")
+	}
+	a.handle(live(dana, me, "M3", true, t0+2, text("from the phone")))
+	if !signalled() {
+		t.Fatal("a message sent from the phone is a sign it's in use")
+	}
+	read := &events.Receipt{MessageSource: types.MessageSource{Chat: mustJID(dana), Sender: mustJID(me), IsFromMe: true}, Type: types.ReceiptTypeRead}
+	a.handle(read)
+	if !signalled() {
+		t.Fatal("a chat read on the phone is a sign it's in use")
 	}
 }

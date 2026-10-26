@@ -20,6 +20,7 @@ messages keep arriving. There is no message database: the folders are the data.
                                               msg id, unix ts, from_me, sender JID
     index/<jid>.tsv.orphaned-<time>           index set aside when a chat folder went missing
     pending-media.json                        media not downloaded yet (keys to retry), and media given up on
+    refetched.json                            empty lines whose type the phone told (`wacli refetch`)
     status.json                               written by a running sync; read by `wacli doctor`
     deleted/<folder>/                         media of messages later deleted for everyone
     names-scanned                             marks the one-time pass that named old chats

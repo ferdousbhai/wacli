@@ -29,6 +29,7 @@ type Status struct {
 	HaltedAt      time.Time `json:"halted_at,omitzero"`
 	NewMessages   int64     `json:"new_messages"`
 	PendingMedia  int       `json:"pending_media"`
+	EmptyLines    int       `json:"empty_lines_to_check,omitempty"` // as of the last refetch round
 	Problems      []string  `json:"problems,omitempty"`
 }
 
@@ -118,6 +119,12 @@ func (a *Archiver) Halt() Halt {
 
 // LoggedOut is closed when WhatsApp unlinks this computer.
 func (a *Archiver) LoggedOut() <-chan struct{} { return a.status.loggedOut }
+
+func (t *statusTracker) setUncheckedLines(n int) {
+	t.mu.Lock()
+	t.s.EmptyLines = n
+	t.mu.Unlock()
+}
 
 func (a *Archiver) writeStatus() {
 	t := a.status
