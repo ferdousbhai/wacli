@@ -3,7 +3,7 @@
 ## 0.26.1 - 2026-10-26
 
 - Editing or deleting a message keeps its sender's name whole when the name holds ": ", and a photo such a sender deleted mid-download is set aside as for anyone.
-- The archive records the `--date-format` its lines are written in and keeps using it, so a later command or the service can't mix in another (older lines would become unreadable for edits and deletes). An archive from before this is checked against its lines; a mismatch is reported by `doctor`.
+- The archive records the `--date-format` its lines are written in and keeps using it, so a later command or the service can't mix in another (older lines would become unreadable for edits and deletes). An archive from before this is checked against its lines; a mismatch is reported by `doctor` (by `doctor --check` while the sync is stopped).
 - `backfill` counts exactly the messages its pages added.
 - `doctor` sees a running sync by its held lock, whatever the binary is called, or, where the lock is out of sight (a sandbox, a container), by a fresh status.
 - An unusable `WACLI_DATE_FORMAT` is an error when setting up a new archive; for an existing one (a service's environment, say) it's ignored with a note. A mistyped `--date-format` is always an error.

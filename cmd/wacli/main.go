@@ -76,6 +76,11 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		// relative path breaks, and IPC names its socket after the store.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			f.typedDate = cmd.Flags().Changed("date-format")
+			if f.typedDate { // before any work is handed to a running sync
+				if err := archive.ValidDateFormat(f.dateFormat); err != nil {
+					return err
+				}
+			}
 			for _, p := range []*string{&f.storeDir, &f.archiveDir} {
 				if *p == "" {
 					continue // left to the "required" error
