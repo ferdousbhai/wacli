@@ -60,9 +60,21 @@ func (a *Archiver) Backfill(ctx context.Context, chatJID string, count, maxReque
 		delete(a.backfillReq, chatJID)
 		a.mu.Unlock()
 	}()
-	before := c.Len()
+	// Pages bring messages older than now; live ones arriving meanwhile
+	// aren't counted.
+	start := time.Now().Unix()
+	older := func() int {
+		n := 0
+		for _, r := range c.Rows() {
+			if r.TS < start {
+				n++
+			}
+		}
+		return n
+	}
+	before := older()
 	defer func() {
-		res.Added = int64(c.Len() - before)
+		res.Added = int64(older() - before)
 		if rows := c.Rows(); len(rows) > 0 {
 			res.Oldest = time.Unix(rows[0].TS, 0)
 		}

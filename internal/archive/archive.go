@@ -887,6 +887,17 @@ func (c *Chat) Hold() {
 	c.mu.Unlock()
 }
 
+// HoldOlder is Hold for a history batch. Each batch walks further back than
+// the last, so what earlier batches merged while held now counts as already
+// archived: its entries of the same second go before them (see InsertOlder),
+// even while another Hold, an import's say, keeps the chat held.
+func (c *Chat) HoldOlder() {
+	c.mu.Lock()
+	c.hold++
+	c.heldOlder = nil
+	c.mu.Unlock()
+}
+
 // Release ends a Hold and writes what's unwritten, even if another Hold on
 // the chat continues: whoever releases may acknowledge its messages next.
 func (c *Chat) Release() error {

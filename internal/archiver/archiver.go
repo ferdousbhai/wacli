@@ -232,7 +232,7 @@ func (b *batch) use(c *archive.Chat) {
 		return
 	}
 	if _, ok := b.held[c.JID()]; !ok {
-		c.Hold()
+		c.HoldOlder()
 		b.held[c.JID()] = c
 	}
 }

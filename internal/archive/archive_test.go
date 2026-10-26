@@ -426,9 +426,9 @@ func TestHeldInsertsAreMergedOnceInOrder(t *testing.T) {
 	c, _, _ := a.EnsureChat("1@s.whatsapp.net", "Dana", "dm", "")
 	c.Insert(Row{ID: "new", TS: 1_000_000}, text("newest"))
 	start := time.Now()
-	c.Hold()
-	for i := 20000; i > 0; i-- { // older history, newest first
-		c.Insert(Row{ID: fmt.Sprint(i), TS: int64(i)}, text(fmt.Sprint(i)))
+	c.HoldOlder()
+	for i := 1; i <= 20000; i++ { // older history, archived oldest first
+		c.InsertOlder(Row{ID: fmt.Sprint(i), TS: int64(i)}, text(fmt.Sprint(i)))
 	}
 	if !c.Has("777") || c.Len() != 20001 {
 		t.Fatal("held entries not visible")

@@ -51,3 +51,22 @@ func TestOlderEntriesKeepOrderAcrossAMergeMidHold(t *testing.T) {
 		})
 	}
 }
+
+// An import can hold the chat across history batches; each batch still walks
+// further back than the one before.
+func TestNextHistoryBatchGoesBeforeTheLastWhileAnImportHolds(t *testing.T) {
+	a := openTest(t)
+	c, _, _ := a.EnsureChat("62@s.whatsapp.net", "Dana", "dm", "")
+	c.Insert(Row{ID: "E", TS: 10}, text("e"))
+	c.Hold() // an import
+	c.HoldOlder()
+	c.InsertOlder(Row{ID: "B", TS: 10}, text("b"))
+	c.Release()
+	c.HoldOlder()
+	c.InsertOlder(Row{ID: "A", TS: 10}, text("a"))
+	c.Release()
+	c.Release()
+	if got := ids(c); got != "A B E" {
+		t.Fatalf("got %s", got)
+	}
+}
