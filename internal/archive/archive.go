@@ -432,8 +432,11 @@ type Chat struct {
 	rows    []Row
 	entries []string
 	byID    map[string]int
-	hold    int  // >0 while a batch of writes is being collected
-	dirty   bool // memory has changes the files don't
+	hold    int // >0 while a batch of writes is being collected
+	// heldOlder: history entries merged while held (a Flush mid-batch);
+	// the batch's later entries of the same second go after them.
+	heldOlder map[string]bool
+	dirty     bool // memory has changes the files don't
 	// pending holds entries inserted during a Hold until they are merged.
 	pending     []pendingEntry
 	pendingByID map[string]int
@@ -787,10 +790,16 @@ func (c *Chat) mergeLocked() {
 	entries := make([]string, 0, cap(rows))
 	i := 0
 	for _, p := range c.pending {
-		for ; i < len(c.rows) && (c.rows[i].TS < p.row.TS || !p.older && c.rows[i].TS == p.row.TS); i++ {
+		for ; i < len(c.rows) && (c.rows[i].TS < p.row.TS || c.rows[i].TS == p.row.TS && (!p.older || c.heldOlder[c.rows[i].ID])); i++ {
 			rows, entries = append(rows, c.rows[i]), append(entries, c.entries[i])
 		}
 		rows, entries = append(rows, p.row), append(entries, p.text)
+		if p.older && c.hold > 0 {
+			if c.heldOlder == nil {
+				c.heldOlder = map[string]bool{}
+			}
+			c.heldOlder[p.row.ID] = true
+		}
 	}
 	c.rows, c.entries = append(rows, c.rows[i:]...), append(entries, c.entries[i:]...)
 	c.pending, c.pendingByID, c.pendingTS = nil, nil, nil
@@ -884,6 +893,9 @@ func (c *Chat) Release() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.hold--
+	if c.hold == 0 {
+		defer func() { c.heldOlder = nil }()
+	}
 	if !c.dirty {
 		return nil
 	}
@@ -930,7 +942,9 @@ func (c *Chat) insert(row Row, build func(pos int) Entry, older bool) (pos int, 
 	if _, ok := c.lookupLocked(row.ID); ok {
 		return 0, false, nil
 	}
-	pos = sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS > row.TS || older && c.rows[i].TS == row.TS })
+	pos = sort.Search(len(c.rows), func(i int) bool {
+		return c.rows[i].TS > row.TS || older && c.rows[i].TS == row.TS && !c.heldOlder[c.rows[i].ID]
+	})
 	// Entries collected during a Hold count too: those up to its second.
 	// History is archived oldest first, so this is usually an append.
 	k := sort.Search(len(c.pendingTS), func(i int) bool { return c.pendingTS[i] > row.TS })

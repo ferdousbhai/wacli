@@ -74,6 +74,9 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		// relative path breaks, and IPC names its socket after the store.
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			for _, p := range []*string{&f.storeDir, &f.archiveDir} {
+				if *p == "" {
+					continue // left to the "required" error
+				}
 				abs, err := filepath.Abs(*p)
 				if err != nil {
 					return err
