@@ -86,6 +86,7 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 				return err
 			}
 			defer stop()
+			s.arc.RefetchInBackground()
 			fmt.Fprintf(os.Stderr, "Archiving into %s; Ctrl+C to stop.\n", s.ar.Root())
 			select {
 			case <-ctx.Done():

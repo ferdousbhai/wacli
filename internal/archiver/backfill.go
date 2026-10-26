@@ -128,7 +128,7 @@ func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor arch
 			ID:            anchor.ID,
 			Timestamp:     time.Unix(anchor.TS, 0),
 		}
-		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, info, count); err != nil {
+		if _, err := a.requestHistory(ctx, info, count, nil); err != nil {
 			return historyBatch{}, err
 		}
 		select {

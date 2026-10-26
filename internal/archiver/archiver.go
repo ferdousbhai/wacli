@@ -24,12 +24,14 @@ import (
 var debug = os.Getenv("WACLI_DEBUG") != ""
 
 type Archiver struct {
-	ar     *archive.Archive
-	wa     *wa.Client
-	names  *names
-	media  *mediaQueue
-	status *statusTracker
-	logf   func(format string, args ...any)
+	ar *archive.Archive
+	wa *wa.Client
+	// requestHistory sends an on-demand history request (wa's, or a test's).
+	requestHistory func(context.Context, types.MessageInfo, int, func(types.MessageID)) (types.MessageID, error)
+	names          *names
+	media          *mediaQueue
+	status         *statusTracker
+	logf           func(format string, args ...any)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -48,15 +50,19 @@ type Archiver struct {
 	refetchRun   sync.Mutex    // one Refetch at a time
 	checked      *checkedLines
 
-	mu          sync.Mutex
-	backfill    map[string]chan historyBatch  // chat JID → backfill waiting for a page
-	refetch     map[string]chan refetchAnswer // message ID → Refetch waiting for it
-	seenPayload map[string]bool
-	namesWanted map[string]bool // chats flagged NeedsNames since a refresh began
+	mu             sync.Mutex
+	backfill       map[string]chan historyBatch  // chat JID → backfill waiting for a page
+	refetch        map[string]chan refetchAnswer // message ID → Refetch waiting for it
+	refetchWait    *refetchWaiter                // the request a Refetch waits on
+	refetchStrikes map[string]int                // message ID → requests that told nothing
+	seenPayload    map[string]bool
+	namesWanted    map[string]bool // chats flagged NeedsNames since a refresh began
 }
 
 type historyBatch struct {
-	last *archive.Row // last message of the page, in the phone's order
+	last   *archive.Row // last message of the page, in the phone's order
+	n      int          // messages in the page
+	oldest int64        // timestamp of its oldest message
 }
 
 func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Archiver, error) {
@@ -64,21 +70,23 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		logf = func(string, ...any) {}
 	}
 	a := &Archiver{
-		ar:           ar,
-		wa:           client,
-		names:        newNames(client),
-		status:       newStatusTracker(ar.Root()),
-		started:      time.Now(),
-		logf:         logf,
-		ctx:          context.Background(),
-		cancel:       func() {},
-		namesChanged: make(chan struct{}, 1),
-		phoneSeen:    make(chan struct{}, 1),
-		checked:      loadCheckedLines(ar.Root(), logf),
-		backfill:     map[string]chan historyBatch{},
-		refetch:      map[string]chan refetchAnswer{},
-		seenPayload:  map[string]bool{},
-		namesWanted:  map[string]bool{},
+		ar:             ar,
+		wa:             client,
+		requestHistory: client.RequestHistorySyncOnDemand,
+		names:          newNames(client),
+		status:         newStatusTracker(ar.Root()),
+		started:        time.Now(),
+		logf:           logf,
+		ctx:            context.Background(),
+		cancel:         func() {},
+		namesChanged:   make(chan struct{}, 1),
+		phoneSeen:      make(chan struct{}, 1),
+		checked:        loadCheckedLines(ar.Root(), logf),
+		backfill:       map[string]chan historyBatch{},
+		refetch:        map[string]chan refetchAnswer{},
+		refetchStrikes: map[string]int{},
+		seenPayload:    map[string]bool{},
+		namesWanted:    map[string]bool{},
 	}
 	q, err := newMediaQueue(a)
 	if err != nil {
@@ -97,7 +105,6 @@ func (a *Archiver) Start(ctx context.Context) {
 	a.background(a.reportStatus)
 	a.background(a.refreshNamesLoop)
 	a.background(a.trimLoop)
-	a.background(a.refetchLoop)
 }
 
 // trimLoop unloads chats nobody touched for a while, so the sync process
@@ -135,6 +142,7 @@ func (a *Archiver) Close() {
 		a.logf("warning: %v", err)
 	}
 	a.media.flush()
+	a.checked.save(a.ar.TmpDir(), a.logf)
 }
 
 func (a *Archiver) Added() int64 { return a.added.Load() }
@@ -172,15 +180,15 @@ func (a *Archiver) handle(evt any) {
 	case *events.Message:
 		a.names.notePush(v.Info.Sender.String(), v.Info.PushName)
 		if v.Info.IsFromMe && v.Info.Sender.Device == 0 {
-			a.phoneActive() // sent from the phone just now
+			a.phoneActive(v.Info.Timestamp) // sent from the phone
 		}
 		a.archiveMessage(ctx, nil, wa.ParseLiveMessage(v), "")
 	case *events.Receipt:
 		if v.IsFromMe && v.Sender.Device == 0 && (v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf) {
-			a.phoneActive() // a chat read on the phone just now
+			a.phoneActive(v.Timestamp) // a chat read on the phone
 		}
 	case *events.HistorySync:
-		a.archiveHistory(ctx, v.Data)
+		a.archiveHistory(ctx, v.Data, v.Notification.GetPeerDataRequestSessionID())
 	case *events.PushName:
 		a.names.notePush(v.JID.String(), v.NewPushName)
 		a.nameChanged()
@@ -226,7 +234,9 @@ func (b *batch) use(c *archive.Chat) {
 	}
 }
 
-func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.HistorySync) {
+// archiveHistory archives a history chunk. session is the ID of the
+// on-demand request it answers, when the phone says.
+func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.HistorySync, session string) {
 	if data == nil {
 		return
 	}
@@ -286,6 +296,10 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 				sender = key.GetParticipant()
 			}
 			page.last = &archive.Row{ID: key.GetID(), TS: int64(web.GetMessageTimestamp()), FromMe: key.GetFromMe(), Sender: sender}
+			if ts := page.last.TS; page.n == 0 || ts < page.oldest {
+				page.oldest = ts
+			}
+			page.n++
 		}
 		pages[chatID] = page
 	}
@@ -302,6 +316,9 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 		a.onDemand.Add(1)
 		// A waiting backfill reads the chat, so tell it only once written.
 		for chatID, page := range pages {
+			if jid, err := types.ParseJID(chatID); err == nil && a.deliverRefetch(session, a.chatKey(ctx, jid).String(), page) {
+				continue
+			}
 			a.deliverBackfill(ctx, chatID, page)
 		}
 	}
@@ -418,9 +435,15 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	if inserted && vcf != "" && err == nil {
 		err = a.placeVCard(c, pm.ID, vcf, pm.VCard.Data)
 	}
-	if inserted && blank(e) && !pm.IsAlbum {
-		// Albums are empty lines in exports too; anything else is a gap.
-		a.logf("note: %s in %s archived as an empty line: %s", pm.ID, c.Name(), describe(pm))
+	if inserted && blank(e) {
+		// Its type is known now, so refetch needn't ask the phone about it.
+		kind := describe(pm)
+		if kind != "no content" {
+			a.checked.note(c.JID(), pm.ID, kind)
+		}
+		if !pm.IsAlbum { // albums are empty lines in exports too
+			a.logf("note: %s in %s archived as an empty line: %s", pm.ID, c.Name(), kind)
+		}
 	}
 	if inserted {
 		a.added.Add(1)

@@ -160,6 +160,7 @@ func (a *Archiver) reportStatus(ctx context.Context) {
 			a.writeStatus()
 			return
 		case <-t.C:
+			a.checked.save(a.ar.TmpDir(), a.logf) // lines recorded as they're archived
 		}
 	}
 }

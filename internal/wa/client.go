@@ -299,7 +299,11 @@ func (c *Client) AddEventHandler(handler func(any)) uint32 {
 	return cli.AddEventHandler(handler)
 }
 
-func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error) {
+// RequestHistorySyncOnDemand asks the phone for the count messages before
+// lastKnown. The reply's notification names the request's ID, which is passed
+// to sent (when not nil) before the request goes out, so a fast reply can't be
+// missed.
+func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int, sent func(types.MessageID)) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
@@ -322,7 +326,11 @@ func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types
 	}
 
 	msg := cli.BuildHistorySyncRequest(&lastKnown, count)
-	resp, err := cli.SendMessage(ctx, ownID, msg, whatsmeow.SendRequestExtra{Peer: true})
+	id := cli.GenerateMessageID()
+	if sent != nil {
+		sent(id)
+	}
+	resp, err := cli.SendMessage(ctx, ownID, msg, whatsmeow.SendRequestExtra{Peer: true, ID: id})
 	if errors.Is(err, whatsmeow.ErrNotConnected) {
 		return "", ErrNotConnected // dropped just now
 	}

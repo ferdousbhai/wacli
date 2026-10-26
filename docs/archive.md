@@ -28,7 +28,7 @@ messages keep arriving. There is no message database: the folders are the data.
 ~/.local/state/wacli/                         session store (--store, WACLI_STORE_DIR)
   session.db                                  WhatsApp login + Signal keys (whatsmeow)
   LOCK                                        held by the one process using the session
-  .send.sock                                  where a running sync takes send/backfill/import
+  .send.sock                                  where a running sync takes send/backfill/refetch/import
 ```
 
 The index exists only because WhatsApp refers to earlier messages by ID (edits,

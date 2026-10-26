@@ -70,11 +70,14 @@ a line is asked about once; `--again` asks about all of them. Album headers stay
 empty: iPhone exports show them that way. Messages missing from the archive
 that come along are added, as with `backfill`.
 
-You rarely need to run it: a running sync does the same by itself, five
-requests at a time, whenever WhatsApp is in use on the phone (a message sent or
-a chat read there). WhatsApp answers only while it's open on the phone, so
-nobody has to keep it open for this. `wacli doctor` shows how many lines are
-left. The sync also logs every new empty line that isn't an album, with its type.
+You rarely need to run it. New empty lines don't need the phone: their type is
+known when they're archived, so it's logged (unless it's an album) and
+recorded. For lines left from before, a running `sync --follow` asks by itself,
+five requests at a time, whenever WhatsApp is in use on the phone (a message
+sent or a chat read there): WhatsApp answers only while it's open, so nobody has
+to keep it open for this. A line the phone says nothing about three times, while
+answering about others, is recorded as `no answer`. `wacli doctor` shows how
+many lines are left.
 
 ## import
 

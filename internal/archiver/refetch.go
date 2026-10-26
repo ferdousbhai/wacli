@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,7 @@ type RefetchItem struct {
 	Chat   string    `json:"chat"`
 	ID     string    `json:"id"`
 	Time   time.Time `json:"time"`
-	Kind   string    `json:"kind"`   // the message's type per the phone; "" when it didn't answer
+	Kind   string    `json:"kind"`   // the message's type per the phone; "" when not known yet
 	Filled bool      `json:"filled"` // the line shows something now
 }
 
@@ -34,11 +35,17 @@ type RefetchOptions struct {
 	Wait        time.Duration
 	MaxRequests int  // 0: no limit; with a limit, the first silence ends the run
 	Again       bool // ask about lines already checked too
+
+	chats  map[string]bool // only these chats (the background loop's backlog)
+	cursor string          // start after this chat's folder
 }
 
 type RefetchResult struct {
 	Items []RefetchItem `json:"items"` // the lines asked about
 	Left  int           `json:"left"`  // empty lines still to check
+
+	leftChats map[string]bool
+	last      string // folder of the last chat asked about
 }
 
 type refetchAnswer struct {
@@ -54,6 +61,19 @@ type refetchJob struct {
 	want   []archive.Row
 }
 
+// refetchWaiter is the request a Refetch is waiting on; archiveHistory hands
+// it the reply.
+type refetchWaiter struct {
+	reqID   string
+	chat    string // archive key of the chat asked about
+	replies chan historyBatch
+}
+
+// noAnswerAfter is how many requests about a line may tell nothing, while
+// the phone answers others, before it's recorded as "no answer" (a chat the
+// phone no longer has, say).
+const noAnswerAfter = 3
+
 // Refetch asks the phone again for messages archived as empty lines, fills
 // in what wacli can show, and records each one's type in refetched.json so
 // it isn't asked about again. Phones ignore requests to resend a message a
@@ -66,61 +86,146 @@ func (a *Archiver) Refetch(ctx context.Context, o RefetchOptions) (res RefetchRe
 	if o.Count <= 0 {
 		o.Count = 50
 	}
-	jobs, err := a.refetchJobs(o)
+	if o.Wait <= 0 {
+		o.Wait = 30 * time.Second
+	}
+	jobs, err := a.refetchJobs(ctx, o)
 	if err != nil {
 		return res, err
 	}
-	defer func() {
-		for _, j := range jobs {
-			res.Left += len(j.want)
+	total := 0
+	for _, j := range jobs {
+		total += len(j.want)
+	}
+	if o.cursor != "" { // carry on after the chat the last round stopped at
+		if i := slices.IndexFunc(jobs, func(j refetchJob) bool { return j.folder > o.cursor }); i > 0 {
+			jobs = append(jobs[i:], jobs[:i]...)
 		}
+	}
+	items := map[string]*RefetchItem{}
+	var order []string
+	resolved := 0
+	settle := func(j refetchJob, row archive.Row, kind string, filled bool) {
+		it, ok := items[row.ID]
+		if !ok {
+			it = &RefetchItem{Folder: j.folder, Chat: j.c.JID(), ID: row.ID, Time: time.Unix(row.TS, 0)}
+			items[row.ID] = it
+			order = append(order, row.ID)
+		}
+		if kind != "" && it.Kind == "" {
+			resolved++
+			it.Kind, it.Filled = kind, filled
+			a.checked.note(j.c.JID(), row.ID, kind)
+		}
+	}
+	defer func() {
+		a.checked.save(a.ar.TmpDir(), a.logf)
+		res.leftChats = map[string]bool{}
+		for _, id := range order {
+			it := items[id]
+			res.Items = append(res.Items, *it)
+		}
+		for _, j := range jobs {
+			for _, row := range j.want {
+				if it := items[row.ID]; it == nil || it.Kind == "" {
+					res.leftChats[j.c.JID()] = true
+				}
+			}
+		}
+		for _, it := range items {
+			if it.Kind == "" {
+				res.leftChats[it.Chat] = true
+			}
+		}
+		res.Left = total - resolved
 		if o.Chat == "" && !o.Again {
 			a.status.setUncheckedLines(res.Left)
 		}
 	}()
 	silent, sent := 0, 0 // silent: requests in a row the phone didn't reply to at all
+	heard := false       // the phone answered something in this run
 	for len(jobs) > 0 && (o.MaxRequests <= 0 || sent < o.MaxRequests) {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		j := jobs[0]
 		sent++
-		got, err := a.requestAround(ctx, j, o.Count, o.Wait)
-		if errors.Is(err, ErrNoAnswer) {
+		res.last = j.folder
+		got, reply, err := a.requestAround(ctx, j, o.Count, o.Wait)
+		var missing []archive.Row
+		for _, row := range j.want {
+			if ans, ok := got[row.ID]; ok {
+				settle(j, row, ans.kind, ans.filled)
+			} else {
+				missing = append(missing, row)
+			}
+		}
+		switch {
+		case errors.Is(err, ErrNoAnswer):
+			if heard { // silent about this chat only, not just locked
+				a.strike(j, missing, settle)
+			}
 			// WhatsApp stops answering soon after the phone locks: stop
 			// rather than mark lines unanswered one timeout at a time.
 			if silent++; silent >= 3 || o.MaxRequests > 0 {
 				return res, ErrPhoneQuiet
 			}
-			jobs = append(jobs[1:], j) // tried again last
+			jobs = append(jobs[1:], refetchJob{j.c, j.folder, j.anchor, missing}) // tried again last
 			continue
-		}
-		silent = 0
-		jobs = jobs[1:]
-		for _, row := range j.want {
-			item := RefetchItem{Folder: j.folder, Chat: j.c.JID(), ID: row.ID, Time: time.Unix(row.TS, 0)}
-			ans, ok := got[row.ID]
-			if !ok && errors.Is(err, errNotSent) {
-				ans = refetchAnswer{id: row.ID, kind: "not on phone"}
-			}
-			if ans.kind != "" {
-				item.Kind, item.Filled = ans.kind, ans.filled
-				a.checked.note(j.c.JID(), row.ID, ans.kind)
-			}
-			res.Items = append(res.Items, item)
-		}
-		a.checked.save(a.ar.TmpDir(), a.logf)
-		if err != nil && !errors.Is(err, errNotSent) {
+		case err != nil:
 			return res, err
+		}
+		silent, heard = 0, true
+		jobs = jobs[1:]
+		// What the reply reached back past, the phone doesn't have; older
+		// lines need the history before the reply's oldest message.
+		var older []archive.Row
+		for _, row := range missing {
+			if reply.n > 0 && row.TS >= reply.oldest {
+				settle(j, row, "not on phone", false)
+			} else {
+				older = append(older, row)
+			}
+		}
+		switch {
+		case len(older) == 0:
+		case reply.last != nil && reply.last.ID != j.anchor.ID:
+			jobs = append([]refetchJob{{j.c, j.folder, *reply.last, older}}, jobs...)
+		default:
+			a.strike(j, older, settle) // an empty reply: the phone didn't know the anchor
 		}
 	}
 	return res, nil
 }
 
-// refetchJobs groups the empty lines not checked yet into requests, newest
-// first: each covers the lines up to count messages before its anchor.
-func (a *Archiver) refetchJobs(o RefetchOptions) ([]refetchJob, error) {
+// strike counts a request about rows that told nothing, and records them as
+// "no answer" once that has happened noAnswerAfter times.
+func (a *Archiver) strike(j refetchJob, rows []archive.Row, settle func(refetchJob, archive.Row, string, bool)) {
+	for _, row := range rows {
+		a.mu.Lock()
+		a.refetchStrikes[row.ID]++
+		n := a.refetchStrikes[row.ID]
+		a.mu.Unlock()
+		kind := ""
+		if n >= noAnswerAfter {
+			kind = "no answer"
+		}
+		settle(j, row, kind, false)
+	}
+}
+
+// refetchJobs groups the empty lines not checked yet into requests: per
+// chat in folder order, newest first, each covering the lines up to half a
+// request's worth of messages before its anchor (the phone's history holds
+// messages the archive doesn't, which push older lines out of the reply).
+func (a *Archiver) refetchJobs(ctx context.Context, o RefetchOptions) ([]refetchJob, error) {
 	var jobs []refetchJob
 	for _, info := range a.ar.Chats() {
-		if o.Chat != "" && info.JID != o.Chat {
+		if o.Chat != "" && info.JID != o.Chat || o.chats != nil && !o.chats[info.JID] {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		c, err := a.ar.Chat(info.JID)
 		if err != nil {
@@ -145,7 +250,7 @@ func (a *Archiver) refetchJobs(o RefetchOptions) ([]refetchJob, error) {
 				anchor = archive.Row{ID: "3EB0" + strings.ToUpper(rows[last].ID), TS: rows[last].TS + 1, FromMe: true}
 			}
 			j := refetchJob{c: c, folder: info.Folder, anchor: anchor}
-			for len(blanks) > 0 && blanks[len(blanks)-1] > last-o.Count {
+			for len(blanks) > 0 && blanks[len(blanks)-1] > last-max(o.Count/2, 1) {
 				j.want = append(j.want, rows[blanks[len(blanks)-1]])
 				blanks = blanks[:len(blanks)-1]
 			}
@@ -165,18 +270,19 @@ func anchorAfter(rows []archive.Row, i int) (archive.Row, bool) {
 	return archive.Row{}, false
 }
 
-// requestAround asks for the history before j.anchor and collects the
-// answers for j.want, trying the chat's other address when the first is
-// silent. The messages are archived by archiveHistory as they arrive.
-func (a *Archiver) requestAround(ctx context.Context, j refetchJob, count int, wait time.Duration) (map[string]refetchAnswer, error) {
+// requestAround asks for the history before j.anchor, trying the chat's
+// other address when the first is silent, and returns the answers for
+// j.want and the reply. archiveHistory archives the messages and sends
+// their answers before handing over the reply.
+func (a *Archiver) requestAround(ctx context.Context, j refetchJob, count int, wait time.Duration) (map[string]refetchAnswer, *historyBatch, error) {
 	chat, err := types.ParseJID(j.c.JID())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ch := make(chan refetchAnswer, len(j.want))
+	answers := make(chan refetchAnswer, len(j.want))
 	a.mu.Lock()
 	for _, row := range j.want {
-		a.refetch[row.ID] = ch
+		a.refetch[row.ID] = answers
 	}
 	a.mu.Unlock()
 	defer func() {
@@ -184,67 +290,77 @@ func (a *Archiver) requestAround(ctx context.Context, j refetchJob, count int, w
 		for _, row := range j.want {
 			delete(a.refetch, row.ID)
 		}
+		a.refetchWait = nil
 		a.mu.Unlock()
 	}()
-	sender, _ := types.ParseJID(j.anchor.Sender)
 	got := map[string]refetchAnswer{}
+	drain := func() {
+		for {
+			select {
+			case ans := <-answers:
+				got[ans.id] = ans
+			default:
+				return
+			}
+		}
+	}
+	sender, _ := types.ParseJID(j.anchor.Sender)
 	for _, target := range a.chatJIDs(ctx, chat) {
 		info := types.MessageInfo{
 			MessageSource: types.MessageSource{Chat: target, Sender: sender, IsFromMe: j.anchor.FromMe, IsGroup: target.Server == types.GroupServer},
 			ID:            j.anchor.ID,
 			Timestamp:     time.Unix(j.anchor.TS, 0),
 		}
-		replies := a.onDemand.Load()
-		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, info, count); err != nil {
-			return got, err
+		w := &refetchWaiter{chat: j.c.JID(), replies: make(chan historyBatch, 1)}
+		_, err := a.requestHistory(ctx, info, count, func(id types.MessageID) {
+			a.mu.Lock()
+			w.reqID = string(id)
+			a.refetchWait = w
+			a.mu.Unlock()
+		})
+		if err != nil {
+			return got, nil, err
 		}
-		replied, err := a.collect(ctx, ch, got, len(j.want), replies, wait)
-		if err != nil || len(got) == len(j.want) {
-			return got, err
-		}
-		if replied {
-			// The reply is in and archived: what it lacked, the phone doesn't have.
-			return got, errNotSent
-		}
-	}
-	return got, ErrNoAnswer
-}
-
-// collect gathers answers into got until it has want of them, a reply to the
-// request (counted by onDemand past replies) is in, or wait passes. Answers
-// are sent before a reply is counted, so none is left behind.
-func (a *Archiver) collect(ctx context.Context, ch chan refetchAnswer, got map[string]refetchAnswer, want int, replies int64, wait time.Duration) (replied bool, err error) {
-	deadline := time.After(wait)
-	tick := time.NewTicker(200 * time.Millisecond)
-	defer tick.Stop()
-	for len(got) < want {
 		select {
 		case <-ctx.Done():
-			return replied, ctx.Err()
-		case ans := <-ch:
-			got[ans.id] = ans
-		case <-tick.C:
-			if a.onDemand.Load() == replies {
-				continue
-			}
-			for {
-				select {
-				case ans := <-ch:
-					got[ans.id] = ans
-				default:
-					return true, nil
-				}
-			}
-		case <-deadline:
-			return false, nil
+			return got, nil, ctx.Err()
+		case reply := <-w.replies:
+			drain()
+			return got, &reply, nil
+		case <-time.After(wait):
 		}
+		drain() // another request's reply may have brought some
 	}
-	return a.onDemand.Load() != replies, nil
+	return got, nil, ErrNoAnswer
 }
 
-// errNotSent is a reply to a Refetch request without the messages asked for:
-// the phone no longer has them.
-var errNotSent = errors.New("the phone's reply didn't include the messages")
+// deliverRefetch hands an on-demand reply to the Refetch waiting for it:
+// matched by the request ID the phone echoes or, when it doesn't, by chat
+// unless a backfill of that chat is waiting too.
+func (a *Archiver) deliverRefetch(session, chatKey string, batch historyBatch) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w := a.refetchWait
+	switch {
+	case w == nil:
+		return false
+	case session != "":
+		if session != w.reqID {
+			return false
+		}
+	case chatKey != w.chat:
+		return false
+	default:
+		if _, busy := a.backfill[chatKey]; busy {
+			return false
+		}
+	}
+	select {
+	case w.replies <- batch:
+	default:
+	}
+	return true
+}
 
 // ErrPhoneQuiet ends a Refetch whose requests the phone stopped answering.
 var ErrPhoneQuiet = errors.New("the phone stopped answering (WhatsApp pauses when the phone locks); the sync carries on whenever you use WhatsApp on the phone")
@@ -267,43 +383,60 @@ func (a *Archiver) chatJIDs(ctx context.Context, jid types.JID) []types.JID {
 }
 
 // phoneActive notes a sign that WhatsApp is open on the phone (a message
-// sent or read there), when it answers requests at once and without asking
-// the user to open it.
-func (a *Archiver) phoneActive() {
+// sent or read there just now), when it answers requests at once and
+// without asking the user to open it. Old events, delivered after a
+// reconnect, aren't signs.
+func (a *Archiver) phoneActive(at time.Time) {
+	if time.Since(at) > 2*time.Minute {
+		return
+	}
 	select {
 	case a.phoneSeen <- struct{}{}:
 	default:
 	}
 }
 
-// refetchLoop checks empty lines a few at a time while the phone is in use,
-// so the backlog clears with no one having to keep WhatsApp open for it.
+// RefetchInBackground has a running sync check the empty lines left from
+// before (see Refetch) a few at a time while the phone is in use, so the
+// backlog clears with no one keeping WhatsApp open for it. New empty lines
+// don't need it: their type is recorded as they're archived.
+func (a *Archiver) RefetchInBackground() { a.background(a.refetchLoop) }
+
 func (a *Archiver) refetchLoop(ctx context.Context) {
 	const perRound, pause = 5, 2 * time.Minute
-	jobs, err := a.refetchJobs(RefetchOptions{Count: 50})
+	jobs, err := a.refetchJobs(ctx, RefetchOptions{Count: 50})
 	if err != nil {
-		a.logf("warning: finding empty lines: %v", err)
+		if ctx.Err() == nil {
+			a.logf("warning: finding empty lines: %v", err)
+		}
+		return
 	}
-	left := 0
+	backlog, left := map[string]bool{}, 0
 	for _, j := range jobs {
+		backlog[j.c.JID()] = true
 		left += len(j.want)
 	}
 	a.status.setUncheckedLines(left)
-	if left == 0 {
-		return
-	}
-	for {
+	cursor := ""
+	for len(backlog) > 0 {
 		select {
 		case <-ctx.Done():
 			return
 		case <-a.phoneSeen:
 		}
-		res, err := a.Refetch(ctx, RefetchOptions{MaxRequests: perRound, Wait: 20 * time.Second})
-		if len(res.Items) > 0 || err != nil && !errors.Is(err, ErrPhoneQuiet) {
-			a.logf("refetch: checked %d empty lines, %d left (%v)", len(res.Items), res.Left, err)
-		}
-		if res.Left == 0 && err == nil {
+		res, err := a.Refetch(ctx, RefetchOptions{MaxRequests: perRound, chats: backlog, cursor: cursor})
+		if ctx.Err() != nil {
 			return
+		}
+		cursor, backlog = res.last, res.leftChats
+		answered := 0
+		for _, it := range res.Items {
+			if it.Kind != "" {
+				answered++
+			}
+		}
+		if answered > 0 || err != nil && !errors.Is(err, ErrPhoneQuiet) {
+			a.logf("refetch: %d empty lines checked, %d left (err: %v)", answered, res.Left, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -388,8 +521,8 @@ func describe(pm wa.ParsedMessage) string {
 }
 
 // checkedLines is .wacli/refetched.json: per chat, the empty lines whose
-// type the phone has told (album, not on phone, a type wacli can't show),
-// so they aren't asked about again.
+// type is known (album, not on phone, a type wacli can't show), so they
+// aren't asked about again.
 type checkedLines struct {
 	path  string
 	mu    sync.Mutex
