@@ -29,6 +29,7 @@ test:
 lint:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
 	$(GO) vet ./...
+	$(GO) mod tidy -diff
 	@out=$$($(GO) run $(DEADCODE) ./... && $(GO) run $(DEADCODE) -test ./...); \
 		if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
 	$(GO) run $(GOVULNCHECK) ./...

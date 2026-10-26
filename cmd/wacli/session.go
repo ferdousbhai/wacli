@@ -25,7 +25,7 @@ type session struct {
 	arc  *archiver.Archiver
 }
 
-var errBusy = errors.New("another wacli is running")
+var errBusy = errors.New("another wacli is running (the wacli-sync service? `systemctl --user stop wacli-sync` first)")
 
 func openSession(f *rootFlags) (*session, error) {
 	l, err := lock.Acquire(f.storeDir)

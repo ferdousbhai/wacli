@@ -248,7 +248,8 @@ func doRefetch(ctx context.Context, s *session, r request) (any, error) {
 		return nil, err
 	}
 	res, err := s.arc.Refetch(ctx, o)
-	if errors.Is(err, archiver.ErrPhoneQuiet) {
+	if err != nil && (len(res.Items) > 0 || errors.Is(err, archiver.ErrPhoneQuiet)) {
+		// What was learnt is recorded; show it with why the run stopped.
 		return refetchReply{res, err.Error()}, nil
 	}
 	return refetchReply{RefetchResult: res}, err
@@ -287,6 +288,9 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			if !running && info["linked"] == true && st.Halted == "" && !st.LoggedOut {
 				problems = append(problems, "sync is not running, so the archive isn't being updated (`systemctl --user start wacli-sync`)")
 			}
+			if !running && info["linked"] == false && !st.LoggedOut {
+				problems = append(problems, "not linked to WhatsApp yet: run `wacli auth`, then start the sync")
+			}
 			if stErr == nil {
 				info["connected"] = running && st.Connected
 				if !st.LastArchived.IsZero() {
@@ -322,7 +326,8 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			if sp, err := defaultSkillPaths(); err == nil {
 				info["agent_skill"] = string(sp.state())
-				if st := sp.state(); st != skillCurrent && st != skillNewer {
+				// Optional: only one that's there and stale is a problem.
+				if st := sp.state(); st == skillOutdated || st == skillUnmanaged {
 					problems = append(problems, "agent skill "+string(st)+": run `wacli skill install`")
 				}
 			}

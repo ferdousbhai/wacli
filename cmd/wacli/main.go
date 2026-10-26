@@ -41,6 +41,10 @@ const exitHalted = 4
 func main() {
 	refreshSkill()
 	if err := newRoot().Execute(); err != nil {
+		if !errors.As(err, new(printedError)) {
+			// Cobra's own: an unknown command, a bad flag or argument.
+			_ = out.WriteError(os.Stderr, false, err)
+		}
 		if errors.Is(err, errUnlinked) {
 			os.Exit(exitUnlinked)
 		}
@@ -87,6 +91,11 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 	return root
 }
 
+// printedError is a command error wrapErrors already printed.
+type printedError struct{ error }
+
+func (e printedError) Unwrap() error { return e.error }
+
 // wrapErrors prints command errors once, as JSON when asked.
 func wrapErrors(c *cobra.Command, f *rootFlags) {
 	for _, sub := range c.Commands() {
@@ -100,8 +109,9 @@ func wrapErrors(c *cobra.Command, f *rootFlags) {
 		err := run(cmd, args)
 		if err != nil {
 			_ = out.WriteError(os.Stderr, f.asJSON, err)
+			return printedError{err}
 		}
-		return err
+		return nil
 	}
 }
 

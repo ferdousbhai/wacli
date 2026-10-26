@@ -91,7 +91,7 @@ func runLocal(f *rootFlags, r request) (any, error) {
 func forward(ctx context.Context, f *rootFlags, r request) (any, error) {
 	conn, err := delegate.Dial(ctx, f.storeDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w and is not accepting requests (only `wacli sync --follow` does): %v", errBusy, err)
+		return nil, fmt.Errorf("another wacli is running and is not accepting requests (only `wacli sync --follow` does): %v", err)
 	}
 	defer conn.Close()
 	// Ctrl+C closes the connection, which tells the sync to stop the work.

@@ -38,6 +38,14 @@ GOBIN=~/.local/bin go install github.com/ferdousbhai/wacli/cmd/wacli@latest   # 
 
 With GCC 15+, set `CGO_CFLAGS=-Wno-error=missing-braces` (the Makefile does).
 
+Tested on Linux (CI and daily use, with the systemd unit below). It builds for
+macOS and Windows but is untested there, and there's no launchd unit yet.
+
+Coming from [openclaw/wacli](https://github.com/openclaw/wacli)? This wacli
+uses the same session store, so it starts out linked, but a link made by the
+old one didn't ask for full history: run `wacli logout` and `wacli auth` to
+archive everything. The old `wacli.db` isn't read and can be deleted.
+
 ## Use
 
 ```bash
