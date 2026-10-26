@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.26.0 - 2026-10-26
+
+First release of this fork: WhatsApp chats kept as iPhone-style export folders.
 
 - Rewrite storage: chats are iPhone-style export folders (`_chat.txt` + media) under `~/WhatsApp`, kept current by `sync`; the SQLite message store, FTS search and the commands built on it are removed.
 - `auth` asks for a full history sync by default; media is always downloaded, with re-upload requests for expired files.
