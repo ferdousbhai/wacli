@@ -146,7 +146,13 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	stored := strings.TrimSpace(string(data))
+	stored := strings.TrimRight(string(data), "\r\n")
+	if stored != "" && ValidDateFormat(stored) != nil {
+		a.probMu.Lock()
+		a.problems = append(a.problems, fmt.Sprintf("%s holds no usable date format (%q); it's ignored", formatFile, stored))
+		a.probMu.Unlock()
+		stored = ""
+	}
 	if stored != "" && (chosen == "" || chosen == stored) {
 		a.opts.DateFormat = stored
 		return nil
@@ -164,7 +170,7 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	if hasLines { // written before formats were recorded
 		if _, err := Parse(first, a.opts.DateFormat, a.opts.Location); err != nil {
 			a.probMu.Lock()
-			a.problems = append(a.problems, fmt.Sprintf("existing lines don't read with --date-format %q (%v): pass the format they use", a.opts.DateFormat, err))
+			a.problems = append(a.problems, fmt.Sprintf("existing lines don't read with --date-format %q (%v): stop the sync, run `wacli --date-format '<their format>' sync` once to record theirs, and start the sync again", a.opts.DateFormat, err))
 			a.probMu.Unlock()
 			return nil
 		}
@@ -176,6 +182,18 @@ func (a *Archive) settleDateFormat(chosen string) error {
 		_, err := w.WriteString(a.opts.DateFormat + "\n")
 		return err
 	})
+}
+
+// ValidDateFormat checks a --date-format layout: it must read back what it
+// writes, with seconds, as iPhone exports have them.
+func ValidDateFormat(layout string) error {
+	if _, err := time.Parse(layout, time.Now().Format(layout)); err != nil {
+		return fmt.Errorf("--date-format %q: %w", layout, err)
+	}
+	if time.Unix(1, 0).UTC().Format(layout) == time.Unix(0, 0).UTC().Format(layout) {
+		return fmt.Errorf("--date-format %q has no seconds; iPhone exports always show them", layout)
+	}
+	return nil
 }
 
 // firstEntry is the first chat line in the archive (by folder name), if any.

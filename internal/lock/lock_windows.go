@@ -34,6 +34,9 @@ func isLockContention(err error) bool {
 	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
+// lockHeld can't be told without touching the lock on Windows.
+func lockHeld(string) (held, ok bool) { return false, false }
+
 func processAlive(pid int) bool {
 	p, err := os.FindProcess(pid) // fails on Windows when there is no such process
 	if err != nil {

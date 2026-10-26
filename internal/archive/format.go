@@ -129,6 +129,7 @@ var headerRE = regexp.MustCompile(`^\x{200e}?\[([^\]]+)\] ((?s:.*?)):(?: |$)`)
 // ParseAs is Parse for an entry known to be from sender: a name holding ": "
 // ("~ Bob: CEO") can't be told from the text otherwise, as in an export.
 func ParseAs(raw, sender, dateFormat string, loc *time.Location) (Entry, error) {
+	sender = CleanName(sender) // as Render writes it
 	i := strings.Index(raw, "] ")
 	if i < 0 || !strings.Contains(sender, ":") {
 		return Parse(raw, dateFormat, loc)

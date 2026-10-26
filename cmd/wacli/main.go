@@ -25,6 +25,7 @@ type rootFlags struct {
 	storeDir   string
 	archiveDir string
 	dateFormat string
+	typedDate  bool // --date-format was given, not just WACLI_DATE_FORMAT
 	asJSON     bool
 }
 
@@ -73,7 +74,8 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		SilenceErrors: true,
 		// Absolute paths: the session store is opened by URI, which a
 		// relative path breaks, and IPC names its socket after the store.
-		PersistentPreRunE: func(*cobra.Command, []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			f.typedDate = cmd.Flags().Changed("date-format")
 			for _, p := range []*string{&f.storeDir, &f.archiveDir} {
 				if *p == "" {
 					continue // left to the "required" error
@@ -151,11 +153,14 @@ func defaultArchiveDir() string {
 // the sync process that owns the files.
 func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
 	if f.dateFormat != "" { // "": the archive's own, or the default
-		if _, err := time.Parse(f.dateFormat, time.Now().Format(f.dateFormat)); err != nil {
-			return nil, fmt.Errorf("--date-format: %w", err)
-		}
-		if time.Unix(1, 0).UTC().Format(f.dateFormat) == time.Unix(0, 0).UTC().Format(f.dateFormat) {
-			return nil, fmt.Errorf("--date-format %q has no seconds; iPhone exports always show them", f.dateFormat)
+		if err := archive.ValidDateFormat(f.dateFormat); err != nil {
+			if f.typedDate {
+				return nil, err
+			}
+			// From the environment, maybe a service's: not worth failing a
+			// start over, as the archive's own format is used anyway.
+			logf("note: ignoring WACLI_DATE_FORMAT: %v", err)
+			f.dateFormat = ""
 		}
 	}
 	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local, Logf: logf, ReadOnly: readOnly})

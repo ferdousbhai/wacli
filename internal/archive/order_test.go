@@ -83,6 +83,10 @@ func TestParseAsKeepsANameHoldingAColon(t *testing.T) {
 	if got := Render(e, DefaultDateFormat); got != raw {
 		t.Fatalf("render %q", got)
 	}
+	// A name as WhatsApp gave it, line break and all: as the file has it.
+	if e, _ := ParseAs(raw, "~\u202fBob:\nCEO", DefaultDateFormat, time.UTC); e.Sender != "~\u202fBob: CEO" {
+		t.Fatalf("uncleaned name: %+v", e)
+	}
 	// Another sender, or none known: as Parse.
 	for _, sender := range []string{"", "Dana", "~ Bob: Sales"} {
 		if e, _ := ParseAs(raw, sender, DefaultDateFormat, time.UTC); e.Sender != "~ Bob" {
@@ -162,5 +166,17 @@ func TestUnrecordedArchiveIsCheckedAgainstItsLines(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(formatPath); strings.TrimSpace(string(data)) != DefaultDateFormat {
 		t.Fatalf("recorded %q", data)
+	}
+}
+
+func TestUnusableRecordedFormatIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Open(Options{Root: root, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, metaDir, formatFile), []byte("2006-01-02 15:04\r\n"), 0o600)
+	a, err := Open(Options{Root: root, Location: time.UTC, ReadOnly: true})
+	if err != nil || a.DateFormat() != DefaultDateFormat || len(a.Problems()) != 1 {
+		t.Fatalf("%v %q %v", err, a.DateFormat(), a.Problems())
 	}
 }

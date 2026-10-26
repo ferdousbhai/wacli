@@ -49,6 +49,8 @@ archive everything. The old `wacli.db` isn't read and can be deleted.
 ## Use
 
 ```bash
+# First, if your phone doesn't show dates like 2026-10-24, 05:33:36, set
+# WACLI_DATE_FORMAT (see Settings); the archive keeps the one it starts with.
 wacli auth                  # scan the QR code; archives your full history and media
 wacli sync --follow         # keep archiving as messages arrive (run it as a service)
 wacli chats                 # where each chat's folder is

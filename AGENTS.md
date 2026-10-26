@@ -10,7 +10,7 @@
 
 ## Key Architectural Facts
 - **The folders are the data.** `~/WhatsApp/WhatsApp Chat - <name>/_chat.txt` must stay byte-compatible with an iPhone export; `internal/archive/testdata` and `WACLI_REFERENCE_EXPORT` (a real export, never committed) check that. Never add markers or IDs to `_chat.txt`.
-- **Bookkeeping lives in `<archive>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `refetched.json`, `status.json`. `session.db` (whatsmeow) is the only database.
+- **Bookkeeping lives in `<archive>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `refetched.json`, `date-format` (the layout its lines use; it wins over the flag), `status.json`. `session.db` (whatsmeow) is the only database.
 - **Writes**: in-memory entries are authoritative. Newest message = two appends; anything else, or any failure, rewrites both files from memory (temp file + rename). History chunks `Hold` the chats they touch; other writers `Flush` before acknowledging.
 - **Times** use the computer's time zone at write time. Don't pin a zone.
 - **Backfill** follows the phone's page order (last message of each page), not timestamps.

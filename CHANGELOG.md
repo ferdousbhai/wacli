@@ -5,6 +5,8 @@
 - Editing or deleting a message keeps its sender's name whole when the name holds ": ".
 - The archive records the `--date-format` its lines are written in and keeps using it, so a later command or the service can't mix in another (older lines would become unreadable for edits and deletes). An archive from before this is checked against its lines; a mismatch is reported by `doctor`.
 - `backfill` counts exactly the messages its pages added.
+- `doctor` sees a running sync by its held lock, whatever the binary is called.
+- An unusable `WACLI_DATE_FORMAT` (from a service's environment, say) is ignored with a note instead of stopping the start; a mistyped `--date-format` is still an error.
 
 ## 0.26.0 - 2026-10-26
 

@@ -67,6 +67,12 @@ func Probe(storeDir string) (bool, string, error) {
 		return false, "", fmt.Errorf("read lock file: %w", err)
 	}
 	info := strings.TrimSpace(string(b))
+	if held, ok := lockHeld(filepath.Join(storeDir, "LOCK")); ok {
+		if !held {
+			return false, "", nil // what LOCK says is stale
+		}
+		return true, info, nil
+	}
 	var pid int
 	for _, line := range strings.Split(info, "\n") {
 		if v, ok := strings.CutPrefix(line, "pid="); ok {
