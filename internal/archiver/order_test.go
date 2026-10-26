@@ -96,3 +96,21 @@ func TestEditAndDeleteKeepANameHoldingAColon(t *testing.T) {
 		t.Fatalf("got\n%q", got)
 	}
 }
+
+// doctor counts a fresh status as a running sync when it can't see the
+// lock (a sandbox); a sync that ended says so.
+func TestStatusSaysWhenTheSyncStopped(t *testing.T) {
+	a, ar := newTestArchiver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.reportStatus(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	if st, err := ReadStatus(ar.Root()); err != nil || st.Stopped {
+		t.Fatalf("running: %+v %v", st, err)
+	}
+	cancel()
+	<-done
+	if st, err := ReadStatus(ar.Root()); err != nil || !st.Stopped {
+		t.Fatalf("stopped: %+v %v", st, err)
+	}
+}

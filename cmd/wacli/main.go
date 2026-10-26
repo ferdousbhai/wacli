@@ -154,7 +154,9 @@ func defaultArchiveDir() string {
 func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
 	if f.dateFormat != "" { // "": the archive's own, or the default
 		if err := archive.ValidDateFormat(f.dateFormat); err != nil {
-			if f.typedDate {
+			// Typed, or setting up a new archive (it would decide the
+			// format for good): an error. Otherwise, below.
+			if f.typedDate || !archive.Exists(f.archiveDir) {
 				return nil, err
 			}
 			// From the environment, maybe a service's: not worth failing a

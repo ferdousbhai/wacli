@@ -28,6 +28,7 @@ type Status struct {
 	Halted        string    `json:"halted,omitempty"` // why the sync stopped, other than unlinking
 	HaltedAt      time.Time `json:"halted_at,omitzero"`
 	NewMessages   int64     `json:"new_messages"`
+	Stopped       bool      `json:"stopped,omitempty"` // the sync ended (cleanly)
 	PendingMedia  int       `json:"pending_media"`
 	EmptyLines    int       `json:"empty_lines_to_check,omitempty"` // as of the last refetch round
 	Problems      []string  `json:"problems,omitempty"`
@@ -155,7 +156,7 @@ func (a *Archiver) reportStatus(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			a.status.mu.Lock()
-			a.status.s.Connected = false
+			a.status.s.Connected, a.status.s.Stopped = false, true
 			a.status.mu.Unlock()
 			a.writeStatus()
 			return

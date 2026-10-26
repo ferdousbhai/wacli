@@ -180,3 +180,27 @@ func TestUnusableRecordedFormatIsIgnored(t *testing.T) {
 		t.Fatalf("%v %q %v", err, a.DateFormat(), a.Problems())
 	}
 }
+
+// A photo from a sender whose name holds ": " is deleted while it downloads:
+// the finished download must go aside, not into the chat on a revived line.
+func TestDownloadOfADeletedPhotoFromAColonNameGoesAside(t *testing.T) {
+	a := openTest(t)
+	a.SetSenderNames(func(string, Row) string { return "~ Bob: CEO" })
+	c, _, _ := a.EnsureChat("120363000000000001@g.us", "Group", "group", "")
+	c.Insert(Row{ID: "P", TS: 10, Sender: "6285555555555@s.whatsapp.net"}, func(int) Entry {
+		return Entry{Sender: "~ Bob: CEO", Omitted: "image omitted"}
+	})
+	if _, err := c.MarkDeleted("P", DeletedByThem); err != nil {
+		t.Fatal(err)
+	}
+	before := chatText(t, c)
+	src := filepath.Join(t.TempDir(), "photo.jpg")
+	os.WriteFile(src, []byte("jpeg"), 0o600)
+	c.PlaceAttachment("P", src, "00000001-PHOTO-1970-01-01-00-00-10.jpg")
+	if after := chatText(t, c); after != before {
+		t.Fatalf("deleted line changed:\n%q\n%q", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir(), "00000001-PHOTO-1970-01-01-00-00-10.jpg")); err == nil {
+		t.Fatal("a deleted photo landed in the chat folder")
+	}
+}

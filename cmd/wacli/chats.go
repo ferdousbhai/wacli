@@ -266,6 +266,13 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				return err
 			}
 			running, _, _ := lock.Probe(f.storeDir)
+			if !running {
+				// The lock can be out of sight (doctor in a sandbox or
+				// container); a sync reports status every 30s.
+				if st, err := archiver.ReadStatus(ar.Root()); err == nil && !st.Stopped && time.Since(st.UpdatedAt) < 90*time.Second {
+					running = true
+				}
+			}
 			info := map[string]any{
 				"archive":      ar.Root(),
 				"store":        f.storeDir,

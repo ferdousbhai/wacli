@@ -184,6 +184,12 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	})
 }
 
+// Exists reports whether root holds an archive already (any chat recorded).
+func Exists(root string) bool {
+	_, err := os.Stat(filepath.Join(root, metaDir, chatsFile))
+	return err == nil
+}
+
 // ValidDateFormat checks a --date-format layout: it must read back what it
 // writes, with seconds, as iPhone exports have them.
 func ValidDateFormat(layout string) error {
@@ -969,8 +975,22 @@ func (c *Chat) Get(id string) (Entry, bool) {
 	if !ok {
 		return Entry{}, false
 	}
-	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
+	e, err := c.parseLocked(id, *text)
 	return e, err == nil
+}
+
+// parseLocked reads entry id (its text given) knowing its sender's current
+// name, so a name holding ": " isn't cut at its colon (see SetSenderNames).
+func (c *Chat) parseLocked(id, text string) (Entry, error) {
+	sender := ""
+	if name := c.a.senderName; name != nil {
+		if i, ok := c.byID[id]; ok {
+			sender = name(c.info.JID, c.rows[i])
+		} else if i, ok := c.pendingByID[id]; ok {
+			sender = name(c.info.JID, c.pending[i].row)
+		}
+	}
+	return ParseAs(text, sender, c.a.opts.DateFormat, c.a.opts.Location)
 }
 
 // Hold collects writes in memory until the matching Release, so inserting
@@ -1127,15 +1147,7 @@ func (c *Chat) updateLocked(id string, fn func(e *Entry) bool) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	sender := ""
-	if name := c.a.senderName; name != nil {
-		if i, ok := c.byID[id]; ok {
-			sender = name(c.info.JID, c.rows[i])
-		} else if i, ok := c.pendingByID[id]; ok {
-			sender = name(c.info.JID, c.pending[i].row)
-		}
-	}
-	e, err := ParseAs(*text, sender, c.a.opts.DateFormat, c.a.opts.Location)
+	e, err := c.parseLocked(id, *text)
 	if err != nil {
 		return false, err
 	}
@@ -1168,7 +1180,7 @@ func (c *Chat) PlaceAttachment(id, src, want string) (string, error) {
 	if !ok {
 		return "", os.Remove(src)
 	}
-	e, err := Parse(*text, c.a.opts.DateFormat, c.a.opts.Location)
+	e, err := c.parseLocked(id, *text)
 	if err != nil {
 		return "", err
 	}
