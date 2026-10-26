@@ -51,7 +51,7 @@ wacli send file --to "Maya" --file invoice.pdf --caption "Invoice"
 wacli doctor
 ```
 
-`send`, `backfill` and `import` hand their work to a running `sync --follow`,
+`send`, `backfill`, `refetch` and `import` hand their work to a running `sync --follow`,
 so they work while the service is up and what you send lands in the archive.
 
 To run sync as a systemd user service:

@@ -45,7 +45,8 @@ type Archiver struct {
 	namesChanged chan struct{}
 
 	mu          sync.Mutex
-	backfill    map[string]chan historyBatch // chat JID → backfill waiting for a page
+	backfill    map[string]chan historyBatch           // chat JID → backfill waiting for a page
+	refetch     map[types.MessageID]chan refetchAnswer // resend request → Refetch waiting
 	seenPayload map[string]bool
 	namesWanted map[string]bool // chats flagged NeedsNames since a refresh began
 }
@@ -69,6 +70,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		cancel:       func() {},
 		namesChanged: make(chan struct{}, 1),
 		backfill:     map[string]chan historyBatch{},
+		refetch:      map[types.MessageID]chan refetchAnswer{},
 		seenPayload:  map[string]bool{},
 		namesWanted:  map[string]bool{},
 	}
@@ -162,6 +164,9 @@ func (a *Archiver) handle(evt any) {
 	switch v := evt.(type) {
 	case *events.Message:
 		a.names.notePush(v.Info.Sender.String(), v.Info.PushName)
+		if v.UnavailableRequestID != "" && a.refetched(ctx, v) {
+			return
+		}
 		a.archiveMessage(ctx, nil, wa.ParseLiveMessage(v), "")
 	case *events.HistorySync:
 		a.archiveHistory(ctx, v.Data)
@@ -361,9 +366,6 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		return
 	}
 
-	if !pm.HasContent() && pm.UnhandledPayload != "" {
-		a.unrendered(pm.UnhandledPayload)
-	}
 	sender := a.senderName(ctx, pm)
 	e := a.entryFor(ctx, pm, sender)
 	fallback := a.isFallbackSender(pm, sender)
@@ -386,6 +388,10 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 	})
 	if inserted && vcf != "" && err == nil {
 		err = a.placeVCard(c, pm.ID, vcf, pm.VCard.Data)
+	}
+	if inserted && blank(e) && !pm.IsAlbum {
+		// Albums are empty lines in exports too; anything else is a gap.
+		a.logf("note: %s in %s archived as an empty line: %s", pm.ID, c.Name(), describe(pm))
 	}
 	if inserted {
 		a.added.Add(1)
@@ -447,15 +453,15 @@ func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) {
 	a.touch()
 }
 
-// unrendered notes, once per type, a message kind written as an empty entry
-// because wacli can't render it yet.
+// unrendered notes, once per type, an edit wacli can't read: the message
+// keeps its earlier text.
 func (a *Archiver) unrendered(payload string) {
 	a.mu.Lock()
 	seen := a.seenPayload[payload]
 	a.seenPayload[payload] = true
 	a.mu.Unlock()
 	if !seen {
-		a.logf("note: %s messages are archived as empty entries (not rendered yet)", payload)
+		a.logf("note: edits sent as %s can't be read yet; those messages keep their earlier text", payload)
 	}
 }
 

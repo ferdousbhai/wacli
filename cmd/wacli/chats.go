@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -166,6 +168,77 @@ func doBackfill(ctx context.Context, s *session, r request) (any, error) {
 		}
 	}
 	return results, nil
+}
+
+func newRefetchCmd(f *rootFlags) *cobra.Command {
+	r := request{Op: "refetch"}
+	cmd := &cobra.Command{
+		Use:   "refetch",
+		Short: "Ask the phone to resend messages archived as empty lines",
+		Long: `Finds every line with nothing after the sender's name (in one chat, or all)
+and asks your phone for its copy of each message. The phone sends it to wacli
+only; nothing goes to the chat. Lines wacli can show are filled in, and each
+message's type is reported. Album headers are empty lines in iPhone exports
+too, so they stay empty. The phone must be online.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := execute(f, r)
+			if res == nil && err != nil {
+				return err
+			}
+			if f.asJSON {
+				if werr := out.WriteJSON(os.Stdout, res); werr != nil {
+					return werr
+				}
+				return err
+			}
+			data, _ := json.Marshal(res)
+			var items []archiver.RefetchItem
+			_ = json.Unmarshal(data, &items)
+			kinds := map[string]int{}
+			filled := 0
+			for _, it := range items {
+				kind := it.Kind
+				if kind == "" {
+					kind = "no answer"
+				}
+				kinds[kind]++
+				if it.Filled {
+					filled++
+				}
+				if it.Filled {
+					kind += " (filled in)"
+				}
+				if it.Kind != "album" {
+					fmt.Printf("%s  %s  %s: %s\n", it.Time.Format("2006-01-02 15:04"), it.Folder, it.ID, kind)
+				}
+			}
+			fmt.Printf("%d empty lines, %d filled in:", len(items), filled)
+			for _, k := range slices.Sorted(maps.Keys(kinds)) {
+				fmt.Printf(" %s %d,", k, kinds[k])
+			}
+			fmt.Println()
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&r.Chat, "chat", "", "chat JID, phone number or name (default: all chats)")
+	cmd.Flags().IntVar(&r.Count, "count", 20, "messages per request")
+	cmd.Flags().DurationVar(&r.Wait, "wait", time.Minute, "how long to wait for the phone's answers to each request")
+	return cmd
+}
+
+func doRefetch(ctx context.Context, s *session, r request) (any, error) {
+	jid := ""
+	if r.Chat != "" {
+		j, err := resolveChat(s.ar, r.Chat, s.lidOf(ctx))
+		if err != nil {
+			return nil, err
+		}
+		jid = j.String()
+	}
+	if err := s.waitLoggedIn(ctx); err != nil {
+		return nil, err
+	}
+	return s.arc.Refetch(ctx, jid, r.Count, r.Wait)
 }
 
 func newDoctorCmd(f *rootFlags) *cobra.Command {

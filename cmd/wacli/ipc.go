@@ -17,7 +17,7 @@ import (
 // request is a unit of work any command can run itself or hand to a running
 // `wacli sync --follow`, which owns the WhatsApp connection.
 type request struct {
-	Op string `json:"op"` // send | backfill | import
+	Op string `json:"op"` // send | backfill | refetch | import
 
 	To      string `json:"to,omitempty"`
 	Text    string `json:"text,omitempty"`
@@ -42,6 +42,8 @@ func (r request) run(ctx context.Context, s *session) (any, error) {
 		return doSend(ctx, s, r)
 	case "backfill":
 		return doBackfill(ctx, s, r)
+	case "refetch":
+		return doRefetch(ctx, s, r)
 	case "import":
 		return doImport(ctx, s.ar, r, s.lidOf(ctx))
 	}

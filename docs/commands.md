@@ -5,7 +5,7 @@ Global flags: `--archive` (`WACLI_ARCHIVE_DIR`, default `~/WhatsApp`), `--store`
 time layout matching your phone's region), `--json`.
 
 One process owns the WhatsApp session at a time. While `sync --follow` runs,
-`send`, `backfill` and `import` hand their work to it; stopping the client
+`send`, `backfill`, `refetch` and `import` hand their work to it; stopping the client
 (Ctrl+C) stops that work. `chats` and `doctor` only read, and work any time.
 
 ## auth
@@ -54,6 +54,20 @@ complete when the phone has nothing more. The phone must be online: `--all`
 gives up (exit status 1) when the first three chats get no answer or the
 connection is lost. Phones don't
 hand linked devices everything; for the rest, use `import`.
+
+## refetch
+
+```bash
+wacli refetch [--chat <name|number|JID>] [--count 20] [--wait 1m]
+```
+
+Finds every line with nothing after the sender's name and asks the phone for
+its copy of each message (between your phone and wacli only; nothing is sent to
+the chat). Lines wacli can show are filled in, and every message's type is
+reported, e.g. `album`, `deleted`, or the WhatsApp field name of a type wacli
+can't show yet. Album headers stay empty: iPhone exports show them that way.
+Messages are asked for `--count` at a time. The sync also logs every new empty
+line that isn't an album, with its type.
 
 ## import
 
