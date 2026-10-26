@@ -209,7 +209,7 @@ func TestDownloadOfADeletedPhotoFromAColonNameGoesAside(t *testing.T) {
 func TestUnrecordedCheckReadsEveryChat(t *testing.T) {
 	root := t.TempDir()
 	a, _ := Open(Options{Root: root, Location: time.UTC})
-	for _, name := range []string{"Ana", "Zed"} {
+	for _, name := range []string{"Ana", "Bea", "Zed"} {
 		c, _, _ := a.EnsureChat(name+"@s.whatsapp.net", name, "dm", "")
 		c.Insert(Row{ID: name, TS: 10}, text("hi"))
 	}
@@ -227,5 +227,21 @@ func TestUnrecordedCheckReadsEveryChat(t *testing.T) {
 	Open(Options{Root: root, DateFormat: DefaultDateFormat, Location: time.UTC})
 	if data, _ := os.ReadFile(filepath.Join(root, metaDir, formatFile)); strings.TrimSpace(string(data)) != DefaultDateFormat {
 		t.Fatalf("recorded %q", data)
+	}
+}
+
+// An empty line (an album header) from a sender whose name holds ": " reads
+// with the whole name, and a delete keeps it.
+func TestEmptyLineFromAColonNameKeepsTheName(t *testing.T) {
+	a := openTest(t)
+	a.SetSenderNames(func(string, Row) string { return "~\u202fBob: CEO" })
+	c, _, _ := a.EnsureChat("120363000000000001@g.us", "Group", "group", "")
+	c.Insert(Row{ID: "A", TS: 10, Sender: "6285555555555@s.whatsapp.net"}, func(int) Entry { return Entry{Sender: "~\u202fBob: CEO"} })
+	if e, _ := c.Get("A"); e.Sender != "~\u202fBob: CEO" || e.Text != "" {
+		t.Fatalf("read %+v", e)
+	}
+	c.MarkDeleted("A", DeletedByThem)
+	if got := chatText(t, c); got != "[1970-01-01, 00:00:10] ~\u202fBob: CEO: \u200eThis message was deleted.\r\n" {
+		t.Fatalf("got %q", got)
 	}
 }

@@ -178,8 +178,8 @@ func (a *Archive) settleDateFormat(chosen string) error {
 		a.probMu.Lock()
 		a.problems = append(a.problems, fmt.Sprintf("%d chats (%s) don't read with --date-format %q: run `wacli --date-format '<the format most chats use>' sync` once with the sync stopped to record it", len(unread), strings.Join(unread[:min(3, len(unread))], ", "), a.opts.DateFormat))
 		a.probMu.Unlock()
-		if chosen == "" || len(unread) == len(firsts) {
-			return nil // a choice made for this archive records anyway
+		if chosen == "" || 2*len(unread) >= len(firsts) {
+			return nil // a choice made for this archive records if most chats read with it
 		}
 	}
 	if a.opts.ReadOnly || stored == a.opts.DateFormat {
@@ -211,6 +211,21 @@ func ValidDateFormat(layout string) error {
 
 type firstLine struct{ folder, text string }
 
+// readStart reads up to n bytes from the start of a file.
+func readStart(path string, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	k, err := io.ReadFull(f, buf)
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil
+	}
+	return buf[:k], err
+}
+
 // firstEntries is each chat's first line (by folder name), or with one only
 // the first chat's: enough to know lines exist.
 func (a *Archive) firstEntries(one bool) []firstLine {
@@ -221,7 +236,7 @@ func (a *Archive) firstEntries(one bool) []firstLine {
 	sort.Strings(folders)
 	var out []firstLine
 	for _, folder := range folders {
-		data, err := os.ReadFile(filepath.Join(a.path(folder), ChatFile))
+		data, err := readStart(filepath.Join(a.path(folder), ChatFile), 64<<10)
 		if err != nil {
 			continue
 		}
@@ -998,8 +1013,9 @@ func (c *Chat) Get(id string) (Entry, bool) {
 // name, so a name holding ": " isn't cut at its colon (see SetSenderNames).
 func (c *Chat) parseLocked(id, text string) (Entry, error) {
 	sender := ""
-	// Only a line with a second ": " can hold a name with one.
-	if name := c.a.senderName; name != nil && strings.Count(text, ": ") > 1 {
+	// Only a line with a second ": ", or ending in ":" (an empty one), can
+	// hold a name with one.
+	if name := c.a.senderName; name != nil && (strings.Count(text, ": ") > 1 || strings.HasSuffix(text, ":")) {
 		if i, ok := c.byID[id]; ok {
 			sender = name(c.info.JID, c.rows[i])
 		} else if i, ok := c.pendingByID[id]; ok {
