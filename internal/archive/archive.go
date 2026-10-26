@@ -437,7 +437,7 @@ type Chat struct {
 	// pending holds entries inserted during a Hold until they are merged.
 	pending     []pendingEntry
 	pendingByID map[string]int
-	pendingTS   []int64   // pending timestamps, newest first
+	pendingTS   []int64   // pending timestamps, oldest first
 	missing     bool      // read found no _chat.txt
 	torn        bool      // read found a last line cut short
 	loaded      bool      // rows and entries are in memory (see Trim)
@@ -771,8 +771,9 @@ func (c *Chat) reindex() {
 
 // pendingEntry is a message inserted during a Hold, merged in at the end.
 type pendingEntry struct {
-	row  Row
-	text string
+	row   Row
+	text  string
+	older bool // goes before merged entries of the same second
 }
 
 // mergeLocked merges the entries inserted during a Hold into place: one sort
@@ -786,7 +787,7 @@ func (c *Chat) mergeLocked() {
 	entries := make([]string, 0, cap(rows))
 	i := 0
 	for _, p := range c.pending {
-		for ; i < len(c.rows) && c.rows[i].TS <= p.row.TS; i++ {
+		for ; i < len(c.rows) && (c.rows[i].TS < p.row.TS || !p.older && c.rows[i].TS == p.row.TS); i++ {
 			rows, entries = append(rows, c.rows[i]), append(entries, c.entries[i])
 		}
 		rows, entries = append(rows, p.row), append(entries, p.text)
@@ -901,10 +902,23 @@ func (c *Chat) Flush() error {
 	return c.flushLocked()
 }
 
-// Insert adds a message in timestamp order. build receives the position the
-// entry is expected at and runs with the chat locked. Inserting a known ID is
-// a no-op that reports inserted=false.
+// Insert adds a message in timestamp order, after entries of the same
+// second. build receives the position the entry is expected at and runs with
+// the chat locked. Inserting a known ID is a no-op that reports
+// inserted=false.
 func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted bool, err error) {
+	return c.insert(row, build, false)
+}
+
+// InsertOlder is Insert for a message from history, which the phone sends
+// walking back in time: it goes before entries already merged in the same
+// second. Messages of one history chunk must come oldest first; each goes
+// after the ones pending before it.
+func (c *Chat) InsertOlder(row Row, build func(pos int) Entry) (pos int, inserted bool, err error) {
+	return c.insert(row, build, true)
+}
+
+func (c *Chat) insert(row Row, build func(pos int) Entry, older bool) (pos int, inserted bool, err error) {
 	if c.a.opts.ReadOnly {
 		return 0, false, ErrReadOnly
 	}
@@ -916,11 +930,11 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 	if _, ok := c.lookupLocked(row.ID); ok {
 		return 0, false, nil
 	}
-	pos = sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS > row.TS })
-	// Entries collected during a Hold count too. pendingTS is kept newest
-	// first, the order history arrives in, so this is usually an append.
-	k := sort.Search(len(c.pendingTS), func(i int) bool { return c.pendingTS[i] <= row.TS })
-	pos += len(c.pendingTS) - k
+	pos = sort.Search(len(c.rows), func(i int) bool { return c.rows[i].TS > row.TS || older && c.rows[i].TS == row.TS })
+	// Entries collected during a Hold count too: those up to its second.
+	// History is archived oldest first, so this is usually an append.
+	k := sort.Search(len(c.pendingTS), func(i int) bool { return c.pendingTS[i] > row.TS })
+	pos += k
 	e := build(pos)
 	if e.System && e.Sender == "" {
 		e.Sender = c.info.Name // read under the lock a Rename takes
@@ -933,7 +947,7 @@ func (c *Chat) Insert(row Row, build func(pos int) Entry) (pos int, inserted boo
 			c.pendingByID = map[string]int{}
 		}
 		c.pendingByID[row.ID] = len(c.pending)
-		c.pending = append(c.pending, pendingEntry{row, text})
+		c.pending = append(c.pending, pendingEntry{row, text, older})
 		c.pendingTS = append(c.pendingTS, 0)
 		copy(c.pendingTS[k+1:], c.pendingTS[k:])
 		c.pendingTS[k] = row.TS

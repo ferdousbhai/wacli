@@ -114,7 +114,7 @@ func (a *Archiver) archiveSystem(ctx context.Context, b *batch, chatJID types.JI
 		return
 	}
 	row := archive.Row{ID: id, TS: ts.Unix(), FromMe: fromMe, Sender: sender}
-	_, inserted, err := c.Insert(row, func(int) archive.Entry { return e })
+	_, inserted, err := insert(b, c)(row, func(int) archive.Entry { return e })
 	if inserted {
 		a.added.Add(1)
 	}

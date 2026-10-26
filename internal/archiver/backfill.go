@@ -100,23 +100,14 @@ func newestAnchor(rows []archive.Row) *archive.Row {
 }
 
 // requestPage sends one on-demand history request. Chats that moved to
-// LID addressing only answer under one of their two JIDs, so both are tried.
+// LID addressing only answer under one of their two JIDs, so both are tried
+// (see chatJIDs).
 func (a *Archiver) requestPage(ctx context.Context, c *archive.Chat, anchor archive.Row, count int, wait time.Duration) (historyBatch, error) {
 	chat, err := types.ParseJID(c.JID())
 	if err != nil {
 		return historyBatch{}, err
 	}
-	candidates := []types.JID{chat}
-	switch chat.Server {
-	case types.DefaultUserServer:
-		if lid := a.wa.ResolvePNToLID(ctx, chat); !lid.IsEmpty() && lid != chat {
-			candidates = append(candidates, lid)
-		}
-	case types.HiddenUserServer:
-		if pn := a.wa.ResolveLIDToPN(ctx, chat); !pn.IsEmpty() && pn != chat {
-			candidates = append(candidates, pn)
-		}
-	}
+	candidates := a.chatJIDs(ctx, chat)
 	sender, _ := types.ParseJID(anchor.Sender)
 	for _, target := range candidates {
 		ch := make(chan historyBatch, 1)

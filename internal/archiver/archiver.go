@@ -281,15 +281,24 @@ func (a *Archiver) archiveHistory(ctx context.Context, data *waHistorySync.Histo
 			a.logf("debug: on-demand history for %s: %d messages, %s %d … %s %d", chatID, len(msgs),
 				first.GetKey().GetID(), first.GetMessageTimestamp(), last.GetKey().GetID(), last.GetMessageTimestamp())
 		}
-		var page historyBatch
-		for _, m := range conv.GetMessages() {
-			web := m.GetMessage()
+		// The phone sends newest first; archived oldest first, messages of
+		// the same second keep their order (see InsertOlder).
+		msgs := conv.GetMessages()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			web := msgs[i].GetMessage()
 			if web == nil {
 				continue
 			}
 			a.archiveWeb(ctx, b, chatID, hint, web)
 			if ch := a.refetchWanted(web.GetKey().GetID()); ch != nil {
 				refetched = append(refetched, wanted{ch, chatID, web})
+			}
+		}
+		var page historyBatch
+		for _, m := range msgs {
+			web := m.GetMessage()
+			if web == nil {
+				continue
 			}
 			// Pages come in the phone's storage order, which is not always
 			// time order; the next page starts after the last message here.
@@ -428,7 +437,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		a.needsNames(c.JID()) // before the entry is on disk, so a crash can't lose the flag
 	}
 	var vcf string
-	_, inserted, err := c.Insert(row, func(pos int) archive.Entry {
+	_, inserted, err := insert(b, c)(row, func(pos int) archive.Entry {
 		switch {
 		case pm.Media != nil && pm.Location == nil && archive.Downloadable(pm.Media.Type):
 			e.Omitted = archive.OmittedText(pm.Media.Type)
@@ -463,6 +472,14 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		}
 	}
 	a.wrote(b, c, err)
+}
+
+// insert is c.Insert, or c.InsertOlder for a message from history (a batch).
+func insert(b *batch, c *archive.Chat) func(archive.Row, func(int) archive.Entry) (int, bool, error) {
+	if b != nil {
+		return c.InsertOlder
+	}
+	return c.Insert
 }
 
 // requeueMedia queues a redelivered media message whose entry is still
@@ -643,7 +660,7 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 	if fallback {
 		a.needsNames(c.JID())
 	}
-	_, inserted, err := c.Insert(row, func(int) archive.Entry {
+	_, inserted, err := insert(b, c)(row, func(int) archive.Entry {
 		return archive.Entry{Sender: sender, Deleted: text}
 	})
 	if inserted {

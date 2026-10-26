@@ -168,7 +168,7 @@ func TestParseHistoryMessageKeyParticipantStillWorks(t *testing.T) {
 
 func TestParseHistoryMessageUnwrapsProtocolEdit(t *testing.T) {
 	groupJID := "120363001234567890@g.us"
-	sender := "16048339070@s.whatsapp.net"
+	sender := "15550101234@s.whatsapp.net"
 	h := &waProto.WebMessageInfo{
 		Key: &waProto.MessageKey{
 			ID:          proto.String("edit-event-id"),
@@ -211,7 +211,7 @@ func TestParseHistoryMessageUnwrapsProtocolEdit(t *testing.T) {
 
 func TestParseHistoryMessageUnwrapsTopLevelEdit(t *testing.T) {
 	groupJID := "120363001234567890@g.us"
-	sender := "16048339070@s.whatsapp.net"
+	sender := "15550101234@s.whatsapp.net"
 	h := &waProto.WebMessageInfo{
 		Key: &waProto.MessageKey{
 			ID:          proto.String("original-msg-id"),

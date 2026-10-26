@@ -70,6 +70,18 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Absolute paths: the session store is opened by URI, which a
+		// relative path breaks, and IPC names its socket after the store.
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			for _, p := range []*string{&f.storeDir, &f.archiveDir} {
+				abs, err := filepath.Abs(*p)
+				if err != nil {
+					return err
+				}
+				*p = abs
+			}
+			return nil
+		},
 	}
 	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp session (session.db)")
 	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the chat folders")

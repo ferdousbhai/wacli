@@ -65,8 +65,12 @@ so they work while the service is up and what you send lands in the archive.
 To run sync as a systemd user service:
 
 ```bash
-cp contrib/systemd/wacli-sync.service ~/.config/systemd/user/   # runs ~/.local/bin/wacli
-systemctl --user enable --now wacli-sync
+mkdir -p ~/.config/systemd/user
+curl -fsSL -o ~/.config/systemd/user/wacli-sync.service \
+  https://raw.githubusercontent.com/ferdousbhai/wacli/main/contrib/systemd/wacli-sync.service
+# (or, from a checkout: cp contrib/systemd/wacli-sync.service ~/.config/systemd/user/)
+systemctl --user daemon-reload
+systemctl --user enable --now wacli-sync   # runs ~/.local/bin/wacli
 loginctl enable-linger "$USER"   # keep it running while you're logged out
 ```
 
