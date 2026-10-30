@@ -6,6 +6,8 @@
 - `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, backfill paging, name refresh, status.json.
 - `internal/wa/`: whatsmeow client wrapper and message parsing (only what the archiver and send use).
 - `skills/wacli/SKILL.md`: the agent skill, embedded in the binary (`skills/embed.go`) and installed by `wacli skill install`. Update it whenever commands or the archive format change.
+- `packaging/aur/wacli/PKGBUILD`: the Arch package (`/usr/bin/wacli`, the `wacli-sync` user unit made from `contrib/systemd/` with `ExecStart=/usr/bin/wacli`; never enabled by the package). `packaging/repo/`: the signed-repo `install.sh` (its `add_signed_repo` is shared byte-for-byte with the owner's other products and hash-pinned in `add_signed_repo.sha256`) and its tests.
+- `bin/build-package <arch>`: native, unsigned package build from committed HEAD; `bin/arch-run` wraps it in a disposable Arch chroot (CI, `.github/workflows/packages.yml`); `bin/release <version>`: maintainer-only signing and publishing; `bin/verify-release` (also `.github/workflows/verify-release.yml`).
 - `internal/config/`: store-dir resolution. `internal/lock/`: the store LOCK. `internal/delegate/`: socket/pipe transport for IPC. `internal/out/`, `internal/fsutil/`, `internal/sqliteutil/`: helpers.
 
 ## Key Architectural Facts
@@ -20,8 +22,13 @@
 - `make build` → `dist/wacli`; `make install` → `~/.local/bin/wacli` (then `systemctl --user restart wacli-sync`).
 - `make test`: `go test -race ./...`, Windows and 32-bit (GOARCH=arm) vet of the cgo-free packages, cgo-required check.
 - `make lint`: gofmt, `go vet`, deadcode (production and tests), govulncheck.
-- `make check`: lint + test + build. Must pass before every commit; CI runs it.
+- `make packaging`: installer, release and package-build script tests (stubbed pacman/gpg/gh; no system changes).
+- `make check`: lint + test + packaging + build. Must pass before every commit; CI runs it.
 - `WACLI_REFERENCE_EXPORT=<unzipped iPhone export> go test -run Reference ./internal/archive` checks the format against a real export.
+
+## Releases
+- Bump `const version` in `cmd/wacli/main.go` and `pkgver` in the PKGBUILD together (`make packaging` checks), add a CHANGELOG entry, tag `vX.Y.Z` and push it (CI builds both architectures), draft the GitHub release, then `bin/release X.Y.Z`. The signing key lives only in the maintainer's keyring, never CI. Don't run release scripts unless asked.
+- Local package build on Arch: `bin/build-package "$(uname -m)"` (needs `go` from pacman); in a clean chroot: `sudo bin/arch-run bin/build-package "$(uname -m)" /output`.
 
 ## Coding Style
 - Standard `gofmt`. Short, early-return functions; explicit errors, no panics.

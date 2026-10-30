@@ -30,16 +30,47 @@ command.
 
 ## Install
 
-Needs Go 1.27+ and a C compiler (the WhatsApp session store is SQLite):
+On Omarchy or any Arch Linux (x86_64 or aarch64):
+
+```bash
+curl -fsSL https://ferdousbhai.com/wacli/install.sh | sudo bash
+```
+
+It adds wacli's signed pacman repository and installs the `wacli` package
+(`/usr/bin/wacli` and the `wacli-sync` systemd user service); updates then
+arrive with `omarchy update` (or `pacman -Syu`). Then link WhatsApp, start the
+service and, for coding agents, install the skill (if your phone doesn't show
+dates like 2026-10-24, 05:33:36, set `WACLI_DATE_FORMAT` before `auth`; see
+Settings):
+
+```bash
+wacli auth                                  # scan the QR code with your phone
+systemctl --user enable --now wacli-sync    # keep archiving in the background
+loginctl enable-linger "$USER"              # keep it running while you're logged out
+wacli skill install                         # optional: the agent skill (see Coding agents)
+```
+
+Elsewhere (other Linux, macOS, Windows), build it with Go 1.27+ and a C
+compiler (the WhatsApp session store is SQLite):
 
 ```bash
 GOBIN=~/.local/bin go install github.com/ferdousbhai/wacli/cmd/wacli@latest   # or, from a checkout: make install
 ```
 
 With GCC 15+, set `CGO_CFLAGS=-Wno-error=missing-braces` (the Makefile does).
+Tested on Linux (CI and daily use, with the systemd unit). It builds for macOS
+and Windows but is untested there, and there's no launchd unit yet.
 
-Tested on Linux (CI and daily use, with the systemd unit below). It builds for
-macOS and Windows but is untested there, and there's no launchd unit yet.
+Moving from a `go install` build to the package? The old binary usually comes
+first on `PATH`, and a unit in `~/.config/systemd/user` overrides the packaged
+one, so swap them over (the archive and the link are untouched):
+
+```bash
+systemctl --user disable wacli-sync   # its enable link points at the old unit
+rm -f ~/.local/bin/wacli ~/.config/systemd/user/wacli-sync.service
+systemctl --user daemon-reload
+systemctl --user enable wacli-sync && systemctl --user restart wacli-sync
+```
 
 Coming from [openclaw/wacli](https://github.com/openclaw/wacli)? This wacli
 uses the same session store, so it starts out linked, but a link made by the
@@ -64,7 +95,8 @@ wacli doctor
 `send`, `backfill`, `refetch` and `import` hand their work to a running `sync --follow`,
 so they work while the service is up and what you send lands in the archive.
 
-To run sync as a systemd user service:
+The Arch package ships the `wacli-sync` service (enable it as above). With a
+`go install` build, add it as a systemd user service yourself:
 
 ```bash
 mkdir -p ~/.config/systemd/user
