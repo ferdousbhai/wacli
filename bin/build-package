@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Build committed source with native Arch tools; signing stays on the maintainer's machine.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+architecture=${1:?usage: bin/build-package <x86_64|aarch64> [output-directory]}
+case "$architecture" in x86_64|aarch64) ;; *) echo "Unsupported architecture: $architecture" >&2; exit 1 ;; esac
+[[ $(uname -m) == "$architecture" ]] || { echo 'A native runner is required.' >&2; exit 1; }
+if (( EUID == 0 )); then
+  [[ ${WACLI_ARCH_ROOT:-} == 1 ]] || { echo 'Run as a regular Arch user, or through bin/arch-run.' >&2; exit 1; }
+  pacman -S --needed --noconfirm base-devel go git
+  exec runuser -u builder -- "$PWD/bin/build-package" "$@"
+fi
+for tool in makepkg go bsdtar; do
+  command -v "$tool" >/dev/null || { echo "Native Arch build requires $tool on PATH." >&2; exit 1; }
+done
+version=$(git -c safe.directory="$PWD" show HEAD:cmd/wacli/main.go | sed -n 's/^const version = "\(.*\)"$/\1/p')
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+output=$(realpath -m "${2:-target/packages/$architecture}")
+cache=$PWD/target/package-cache/$architecture
+export GOMODCACHE=$(realpath -m "${GOMODCACHE:-$cache/gomod}")
+export GOCACHE=$(realpath -m "${GOCACHE:-$cache/gobuild}")
+mkdir -p "$output" "$GOMODCACHE" "$GOCACHE"
+work=$(mktemp -d)
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
+commit=$(git -c safe.directory="$PWD" rev-parse HEAD)
+git -c safe.directory="$PWD" archive --prefix="wacli-$version/" "$commit" | gzip -n > "$work/source.tar.gz"
+git -c safe.directory="$PWD" show "$commit":packaging/aur/wacli/PKGBUILD > "$work/PKGBUILD"
+sum=$(sha256sum "$work/source.tar.gz" | cut -d" " -f1)
+sed -i -e 's|^source=.*|source=(source.tar.gz)|' -e "s/^sha256sums=.*/sha256sums=('$sum')/" "$work/PKGBUILD"
+(cd "$work" && PKGDEST="$output" PKGEXT=.pkg.tar.zst makepkg --force)
+package="$output/wacli-$version-1-$architecture.pkg.tar.zst"
+info=$(bsdtar -xOf "$package" .PKGINFO)
+grep -qxF 'pkgname = wacli' <<< "$info"
+grep -qxF "pkgver = $version-1" <<< "$info"
+grep -qxF "arch = $architecture" <<< "$info"
+bsdtar -xOf "$package" usr/bin/wacli > "$work/wacli"
+chmod +x "$work/wacli"
+[[ $("$work/wacli" --version) == "wacli version $version" ]]
+printf '%s\n' "$commit" > "$output/source-commit.txt"

@@ -42,3 +42,6 @@ go.work.sum
 
 # Build output
 /dist/
+
+# Package builds and release staging (bin/build-package, bin/release)
+/target/

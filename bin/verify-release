@@ -1,0 +1,22 @@
+#!/bin/bash
+# Verify exactly one published release on its native architecture. No automatic deletion.
+set -euo pipefail
+version=${1:?usage: bin/verify-release <version> [x86_64|aarch64]}
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version' >&2; exit 1; }
+arch=${2:-$(uname -m)}
+case "$arch" in x86_64|aarch64) ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
+[[ $(uname -m) == "$arch" ]] || { echo 'A native runner is required.' >&2; exit 1; }
+cd "$(dirname "$0")/.."
+releases=https://github.com/ferdousbhai/wacli/releases/download/v$version
+exec bin/arch-run env EXPECTED_VERSION="$version" EXPECTED_ARCH="$arch" \
+  WACLI_RELEASES_URL="$releases" bash -euo pipefail -c '
+    [[ $(uname -m) == "$EXPECTED_ARCH" ]]
+    curl --fail --location --retry 3 "$WACLI_RELEASES_URL/install.sh" -o /tmp/install.sh
+    bash /tmp/install.sh
+    [[ $(pacman -Q wacli | cut -d" " -f2) == "$EXPECTED_VERSION-1" ]]
+    [[ $(wacli --version) == "wacli version $EXPECTED_VERSION" ]]
+    ldd /usr/bin/wacli > /tmp/wacli-libraries
+    ! grep -q "not found" /tmp/wacli-libraries
+    grep -qx "ExecStart=/usr/bin/wacli sync --follow" /usr/lib/systemd/user/wacli-sync.service
+    wacli skill show > /dev/null
+  '

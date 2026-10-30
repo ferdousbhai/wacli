@@ -1,0 +1,49 @@
+name: Native packages
+# Builds the release packages for a version tag; bin/release signs and publishes them locally.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash packaging/repo/test.sh
+      - run: python3 packaging/repo/test_arch.py
+      - run: bash -n bin/build-package bin/arch-run bin/release bin/verify-release packaging/aur/wacli/PKGBUILD
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: target/package-cache/${{ matrix.arch }}
+          key: native-${{ matrix.arch }}-${{ hashFiles('go.sum', 'packaging/aur/wacli/PKGBUILD') }}
+          restore-keys: |
+            native-${{ matrix.arch }}-
+      - name: Install Arch chroot tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y arch-install-scripts zstd
+      - name: Build and test native package
+        run: sudo bin/arch-run bin/build-package '${{ matrix.arch }}' /output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wacli-${{ matrix.arch }}
+          path: |
+            target/packages/${{ matrix.arch }}/*.pkg.tar.zst
+            target/packages/${{ matrix.arch }}/source-commit.txt
+          if-no-files-found: error

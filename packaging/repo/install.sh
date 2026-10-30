@@ -1,0 +1,123 @@
+#!/bin/bash
+# Install wacli (WhatsApp chats kept as iPhone-style export folders) from its
+# signed package repository, and keep it updating with the system:
+#
+#   curl -fsSL https://ferdousbhai.com/wacli/install.sh | sudo bash
+#
+# (the same file as https://github.com/ferdousbhai/wacli/releases/latest/download/install.sh)
+#
+# Every step is idempotent, so re-running is safe. It trusts the
+# package-signing key (checked against the fingerprint pinned below), adds the
+# [wacli] repository, installs an Omarchy hook that restores it after
+# `omarchy refresh pacman` rewrites /etc/pacman.conf, and installs the package.
+# It does not start the sync service: link WhatsApp first (see the end).
+set -euo pipefail
+
+REPO=wacli
+RELEASES=${WACLI_RELEASES_URL:-https://github.com/ferdousbhai/wacli/releases/latest/download}
+SIGNING_KEY_FINGERPRINT=52130299581DAD685226900CA89CA1A6A1E74251
+PACKAGES=(wacli)
+
+# --- add_signed_repo (shared) ---
+# Trust a project's package-signing key (checked against the pinned
+# fingerprint), add its signed pacman repository, and keep the repository
+# across `omarchy refresh pacman`, which rewrites /etc/pacman.conf from
+# Omarchy's defaults and then runs the user's pre-refresh-pacman hooks.
+# Works as root (`sudo bash`) or as a desktop user (sudo inside). This text
+# is identical in every installer that uses it, and each repository's test
+# pins its hash: change it here and in its twins together.
+add_signed_repo() {
+  local name="$1" release="$2" fingerprint="$3"
+  local conf="/etc/pacman.d/$name.conf" include="Include = /etc/pacman.d/$name.conf"
+  local sudo='' key user home hook_dir
+  (( EUID == 0 )) || sudo=sudo
+  key="$(mktemp)"
+  if ! curl -fsSL "$release/$name-signing-key.asc" -o "$key"; then
+    rm -f "$key"
+    echo "Could not download the package-signing key from $release." >&2
+    return 1
+  fi
+  if ! gpg --batch --with-colons --show-keys "$key" 2>/dev/null | grep -q "^fpr:*:$fingerprint:"; then
+    rm -f "$key"
+    echo "The downloaded key does not match the pinned fingerprint $fingerprint; nothing was changed." >&2
+    return 1
+  fi
+  $sudo pacman-key --add "$key"
+  $sudo pacman-key --lsign-key "$fingerprint"
+  rm -f "$key"
+  printf '[%s]\nSigLevel = Required DatabaseRequired\nServer = %s\n' "$name" "$release" | $sudo tee "$conf" >/dev/null
+  grep -qxF "$include" /etc/pacman.conf || printf '\n%s\n' "$include" | $sudo tee -a /etc/pacman.conf >/dev/null
+  user="${SUDO_USER:-${USER:-$(id -un)}}"
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  if [[ -n $home && -d $home/.config/omarchy ]]; then
+    hook_dir="$home/.config/omarchy/hooks/pre-refresh-pacman.d"
+    install -d -o "$user" -g "$(id -gn "$user")" "$hook_dir"
+    printf '%s\n' '#!/bin/bash' \
+      "# Restore the [$name] repository after Omarchy rewrote /etc/pacman.conf." \
+      "grep -qxF '$include' /etc/pacman.conf || printf '\\n%s\\n' '$include' | sudo tee -a /etc/pacman.conf >/dev/null" \
+      > "$hook_dir/$name"
+    chown "$user" "$hook_dir/$name"
+    chmod 755 "$hook_dir/$name"
+  fi
+  $sudo pacman -Sy
+}
+# --- end add_signed_repo ---
+
+if ! command -v pacman >/dev/null; then
+  echo "pacman not found: this installer is for Omarchy and other Arch Linux systems." >&2
+  echo "Elsewhere, build it with Go: https://github.com/ferdousbhai/wacli#install" >&2
+  exit 1
+fi
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64) REPO=wacli-aarch64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+echo "Adding the [$REPO] repository"
+add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+
+echo "Installing ${PACKAGES[*]}"
+if command -v omarchy-pkg-add >/dev/null; then
+  # Omarchy refuses direct `pacman -Syu` (system upgrades go through `omarchy update`), so install
+  # the way Omarchy installs its own apps; the next `omarchy update` brings everything current.
+  omarchy-pkg-add "${PACKAGES[@]}"
+else
+  # Upgrade and install in one transaction: add_signed_repo has just synced every database, and
+  # installing from those without upgrading is a partial upgrade.
+  sudo=''
+  (( EUID == 0 )) || sudo=sudo
+  $sudo pacman -Syu --needed --noconfirm "${PACKAGES[@]}"
+fi
+
+# A wacli built with `go install` / `make install`, or its copy of the service, would
+# shadow the package's. Point them out; never remove someone's files.
+user="${SUDO_USER:-${USER:-$(id -un)}}"
+home="$(getent passwd "$user" | cut -d: -f6)"
+if [[ -n $home && -e $home/.local/bin/wacli ]]; then
+  cat <<EOT
+
+Note: $home/.local/bin/wacli (an earlier go install) comes before /usr/bin/wacli
+on PATH. Remove it to use the package: rm ~/.local/bin/wacli
+EOT
+fi
+if [[ -n $home && -e $home/.config/systemd/user/wacli-sync.service ]]; then
+  cat <<EOT
+
+Note: $home/.config/systemd/user/wacli-sync.service overrides the packaged service.
+To use the package's (which runs /usr/bin/wacli), as yourself:
+  systemctl --user disable wacli-sync
+  rm ~/.config/systemd/user/wacli-sync.service && systemctl --user daemon-reload
+  systemctl --user enable wacli-sync && systemctl --user restart wacli-sync
+EOT
+fi
+
+cat <<'EOT'
+
+Done. Link WhatsApp (scan the QR code with your phone): wacli auth
+Then keep archiving in the background:
+  systemctl --user enable --now wacli-sync
+  loginctl enable-linger "$USER"   # keep it running while you're logged out
+For coding agents: wacli skill install
+Updates arrive with the rest of the system: omarchy update (or pacman -Syu elsewhere)
+EOT

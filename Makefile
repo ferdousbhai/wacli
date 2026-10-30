@@ -7,7 +7,7 @@ export CGO_CFLAGS := $(CGO_CFLAGS) -Wno-error=missing-braces
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
 DEADCODE := golang.org/x/tools/cmd/deadcode@v0.52.0
 
-.PHONY: build install test lint check
+.PHONY: build install test lint packaging check
 
 ## build: compile dist/wacli
 build:
@@ -34,5 +34,11 @@ lint:
 		if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
 	$(GO) run $(GOVULNCHECK) ./...
 
+## packaging: installer, release and package-build script tests (no system changes)
+packaging:
+	bash packaging/repo/test.sh
+	python3 packaging/repo/test_arch.py
+	bash -n bin/build-package bin/arch-run bin/release bin/verify-release packaging/aur/wacli/PKGBUILD
+
 ## check: everything CI runs
-check: lint test build
+check: lint test packaging build
