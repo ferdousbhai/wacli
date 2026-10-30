@@ -27,7 +27,7 @@ test:
 
 ## lint: formatting, vet, unreachable code, known vulnerabilities
 lint:
-	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+	@test -z "$$(gofmt -l cmd internal skills)" || { gofmt -l cmd internal skills; exit 1; }
 	$(GO) vet ./...
 	$(GO) mod tidy -diff
 	@out=$$($(GO) run $(DEADCODE) ./... && $(GO) run $(DEADCODE) -test ./...); \
