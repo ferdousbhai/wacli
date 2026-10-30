@@ -1,6 +1,6 @@
 # Maintainer: Ferdous Bhai <23114244+ferdousbhai@users.noreply.github.com>
 pkgname=wacli
-pkgver=0.26.1
+pkgver=0.26.2
 pkgrel=1
 pkgdesc="Keep your WhatsApp chats as iPhone-style export folders, kept up to date"
 arch=('x86_64' 'aarch64')

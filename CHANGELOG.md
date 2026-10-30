@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.26.2 - 2026-10-30
+
+- Install on Omarchy/Arch (x86_64 and aarch64) from a signed pacman repository: `curl -fsSL https://ferdousbhai.com/wacli/install.sh | sudo bash`. The `wacli` package ships `/usr/bin/wacli` and the `wacli-sync` systemd user service (enable it after `wacli auth`); updates come with `omarchy update`. `go install` remains the way elsewhere. No change to the archive, its times or sync.
+
 ## 0.26.1 - 2026-10-26
 
 - Editing or deleting a message keeps its sender's name whole when the name holds ": ", and a photo such a sender deleted mid-download is set aside as for anyone.
