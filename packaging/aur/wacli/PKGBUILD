@@ -42,7 +42,8 @@ build() {
 check() {
   cd "$(_srcdir)"
   _goenv
-  go test ./...
+  # Without -trimpath: internal/wa's lock test finds client.go through runtime.Caller.
+  GOFLAGS="${GOFLAGS/-trimpath /}" go test ./...
 }
 
 package() {
