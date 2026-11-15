@@ -36,7 +36,7 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 			if err != nil {
 				return err
 			}
-			res, err := runLocal(f, request{Op: "import", File: path, Chat: chat})
+			res, err := runLocal(f, request{Op: "import", Account: f.account, File: path, Chat: chat})
 			if err != nil {
 				return err
 			}
@@ -48,6 +48,7 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 		},
 	}
 	cmd.Flags().StringVar(&chat, "chat", "", "chat JID, phone number or name to merge into")
+	addAccountFlag(cmd, f, oneAccountUsage)
 	return cmd
 }
 

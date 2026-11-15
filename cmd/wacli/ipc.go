@@ -17,7 +17,8 @@ import (
 // request is a unit of work any command can run itself or hand to a running
 // `wacli sync --follow`, which owns the WhatsApp connection.
 type request struct {
-	Op string `json:"op"` // send | backfill | refetch | import | watch
+	Op      string `json:"op"`                // send | backfill | refetch | import | watch
+	Account string `json:"account,omitempty"` // --account: a number or account folder; "" with one account (all, for watch)
 
 	To      string `json:"to,omitempty"`
 	Text    string `json:"text,omitempty"`
@@ -41,23 +42,30 @@ type response struct {
 
 func (r request) run(ctx context.Context, s *session) (any, error) {
 	switch r.Op {
-	case "send":
-		return doSend(ctx, s, r)
-	case "backfill":
-		return doBackfill(ctx, s, r)
-	case "refetch":
-		return doRefetch(ctx, s, r)
-	case "import":
-		return doImport(ctx, s.ar, r, s.lidOf(ctx))
+	case "send", "backfill", "refetch", "import":
+	default:
+		return nil, fmt.Errorf("unknown op %q", r.Op)
 	}
-	return nil, fmt.Errorf("unknown op %q", r.Op)
+	a, err := s.account(r.Account)
+	if err != nil {
+		return nil, err
+	}
+	switch r.Op {
+	case "send":
+		return doSend(ctx, a, r)
+	case "backfill":
+		return doBackfill(ctx, a, r)
+	case "refetch":
+		return doRefetch(ctx, a, r)
+	}
+	return doImport(ctx, a.ar, r, a.lidOf(ctx))
 }
 
 // execute runs r in this process, or in the running sync if it holds the store.
 func execute(f *rootFlags, r request) (any, error) {
 	ctx, cancel := signalContext()
 	defer cancel()
-	s, err := openSession(f)
+	s, err := openSession(f, one(r.Account))
 	if errors.Is(err, errBusy) {
 		return forward(ctx, f, r)
 	}
@@ -65,10 +73,11 @@ func execute(f *rootFlags, r request) (any, error) {
 		return nil, err
 	}
 	defer s.close()
-	if !s.wa.IsAuthed() {
-		return nil, errUnlinked
+	a := s.accounts[0]
+	if !a.wa.IsAuthed() {
+		return nil, fmt.Errorf("%s: %w", a.Label(), errUnlinked)
 	}
-	if err := s.start(ctx, wa.ConnectOptions{}); err != nil {
+	if err := a.start(ctx, wa.ConnectOptions{}); err != nil {
 		return nil, err
 	}
 	return r.run(ctx, s)
@@ -79,7 +88,7 @@ func execute(f *rootFlags, r request) (any, error) {
 func runLocal(f *rootFlags, r request) (any, error) {
 	ctx, cancel := signalContext()
 	defer cancel()
-	s, err := openSession(f)
+	s, err := openSession(f, one(r.Account))
 	if errors.Is(err, errBusy) {
 		return forward(ctx, f, r)
 	}
@@ -166,7 +175,12 @@ func handleConn(ctx context.Context, s *session, conn net.Conn, quit <-chan stru
 		cancel()
 	}()
 	if r.Op == "watch" {
-		serveWatch(ctx, quit, s.arc, conn, r.Since)
+		src, err := s.watchSource(r.Account)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(watchFrame{Error: err.Error()})
+			return
+		}
+		serveWatch(ctx, quit, src, conn, r.Since)
 		return
 	}
 	res, err := r.run(ctx, s)

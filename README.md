@@ -5,13 +5,14 @@ Keep your WhatsApp chats as plain folders, shaped exactly like the iPhone's
 
 ```
 ~/WhatsApp/
-  WhatsApp Chat - Maya/
-    _chat.txt
-    00000039-Restructuring Invoice - PT. Acme Holding.pdf
-    00000040-PHOTO-2025-10-25-04-22-21.jpg
-  WhatsApp Chat - Sam Lee/
-    _chat.txt
-    …
+  +15551234567/                 one folder per WhatsApp account (rename it if you like)
+    WhatsApp Chat - Maya/
+      _chat.txt
+      00000039-Restructuring Invoice - PT. Acme Holding.pdf
+      00000040-PHOTO-2025-10-25-04-22-21.jpg
+    WhatsApp Chat - Sam Lee/
+      _chat.txt
+      …
 ```
 
 ```
@@ -98,9 +99,29 @@ so they work while the service is up and what you send lands in the archive.
 
 `watch` follows that sync too: one JSON object per line for each new, edited or
 deleted message, printed once it is on disk (`ref` is the chat's `_chat.txt`,
-`media` the attachment, if any). `--since <unix ms>` catches up first; your
-own messages are left out unless `--include-mine`. See
-[docs/commands.md](docs/commands.md#watch).
+`media` the attachment, if any, `account` the account's folder). `--since
+<unix ms>` catches up first; your own messages are left out unless
+`--include-mine`. See [docs/commands.md](docs/commands.md#watch).
+
+### Several accounts
+
+Run `wacli auth` once per WhatsApp account (stop the sync first, and start it
+again after). Each account gets its own folder in the archive, named after its
+number, and its own session in the store; one `sync --follow` serves them all.
+Rename an account's folder whenever you like (stop the sync first): wacli
+finds it again by the `.wacli/account` file inside it.
+
+```bash
+mv ~/WhatsApp/+15551234567 ~/WhatsApp/Personal
+wacli send text --account Personal --to Maya --message "On my way"   # or --account +15551234567
+wacli chats --account Personal                                        # chats, doctor and watch show every account without it
+```
+
+With one account `--account` is never needed. With several, `send`,
+`backfill`, `refetch`, `import` and `logout` ask for it (or `WACLI_ACCOUNT`)
+and list the accounts. Upgrading from a version without accounts moves the
+chat folders and the session into the account's folder by itself, the first
+time any command runs.
 
 The Arch package ships the `wacli-sync` service (enable it as above). With a
 `go install` build, add it as a systemd user service yourself:
@@ -138,6 +159,7 @@ overwrites a skill it didn't install (`--force` adopts one, keeping a backup).
 |---|---|---|
 | `--archive` | `WACLI_ARCHIVE_DIR` | `~/WhatsApp` |
 | `--store` (session) | `WACLI_STORE_DIR` | `~/.local/state/wacli` on Linux, `~/.wacli` elsewhere |
+| `--account` | `WACLI_ACCOUNT` | the only account (needed with several, for commands that act on one) |
 | `--date-format` | `WACLI_DATE_FORMAT` | `2006-01-02, 15:04:05` (Go layout; match your phone's region; set it for the first `auth`, the archive then keeps it) |
 
 Times are written in the computer's time zone, as the phone writes them in its own.

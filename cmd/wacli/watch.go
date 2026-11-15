@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,12 +9,16 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ferdousbhai/wacli/internal/archiver"
 	"github.com/ferdousbhai/wacli/internal/delegate"
 	"github.com/spf13/cobra"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func newWatchCmd(f *rootFlags) *cobra.Command {
@@ -25,22 +30,21 @@ func newWatchCmd(f *rootFlags) *cobra.Command {
 		Long: `Prints one JSON object per line for every new, edited or deleted message
 the running ` + "`wacli sync --follow`" + ` archives, once it is on disk:
 
-  {"source":"whatsapp","id":"…","thread":"<chat JID>","chat":"<name>",
-   "at":<unix ms>,"from":"<sender>","from_me":false,"kind":"text",
-   "text":"…","media":"<file or empty>","ref":"<…/_chat.txt>"}
+  {"source":"whatsapp","account":"<account folder>","id":"…",
+   "thread":"<chat JID>","chat":"<name>","at":<unix ms>,"from":"<sender>",
+   "from_me":false,"kind":"text","text":"…","media":"<file or empty>",
+   "ref":"<…/<account folder>/WhatsApp Chat - <name>/_chat.txt>"}
 
 kind is text, media, system, edit or delete; an edit or delete has its own
-id (<message id>:edit-<ms>, <message id>:delete-<ms>). Your own messages are
-left out unless --include-mine. It opens no WhatsApp connection of its own
+id (<message id>:edit-<ms>, <message id>:delete-<ms>). Every linked account
+is watched unless --account. Your own messages are left out unless
+--include-mine. It opens no WhatsApp connection of its own
 and exits non-zero when no sync is running or the sync stops.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.Account = f.account
 			if chat != "" {
-				ar, err := f.openArchive(true)
-				if err != nil {
-					return err
-				}
-				jid, err := resolveChat(ar, chat, nil)
+				jid, err := resolveWatchedChat(f, chat)
 				if err != nil {
 					return err
 				}
@@ -54,10 +58,46 @@ and exits non-zero when no sync is running or the sync stops.`,
 	cmd.Flags().Int64Var(&o.Since, "since", 0, "first print archived messages sent since this time (unix ms), to catch up")
 	cmd.Flags().StringVar(&chat, "chat", "", "only this chat (a name, number or JID)")
 	cmd.Flags().BoolVar(&o.IncludeMine, "include-mine", false, "also print messages you sent")
+	addAccountFlag(cmd, f, allAccountUsage)
 	return cmd
 }
 
+// resolveWatchedChat finds the chat in the watched accounts' archives: the
+// first that has it, or a number none has yet.
+func resolveWatchedChat(f *rootFlags, chat string) (types.JID, error) {
+	reg, err := readRegistry(f)
+	if err != nil {
+		return types.JID{}, err
+	}
+	list, err := reg.Filter(f.account)
+	if err != nil {
+		return types.JID{}, err
+	}
+	var firstErr error
+	var number types.JID
+	for _, a := range list {
+		ar, err := f.openArchive(reg, a, true)
+		if err != nil {
+			return types.JID{}, err
+		}
+		jid, err := resolveChat(ar, chat, nil)
+		if err != nil {
+			firstErr = cmp.Or(firstErr, err)
+			continue
+		}
+		if _, ok := ar.Info(jid.String()); ok {
+			return jid, nil
+		}
+		number = jid
+	}
+	if !number.IsEmpty() {
+		return number, nil
+	}
+	return types.JID{}, firstErr
+}
+
 type watchOptions struct {
+	Account     string // only this account (--account); "" for all
 	Since       int64
 	Thread      string // only this chat; "" for all
 	IncludeMine bool
@@ -87,7 +127,7 @@ func watch(ctx context.Context, storeDir string, o watchOptions, w io.Writer) er
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	if err := json.NewEncoder(conn).Encode(request{Op: "watch", Since: o.Since}); err != nil {
+	if err := json.NewEncoder(conn).Encode(request{Op: "watch", Account: o.Account, Since: o.Since}); err != nil {
 		return err
 	}
 	dec := json.NewDecoder(conn)
@@ -132,10 +172,88 @@ func stopped(last int64, err error) error {
 	return fmt.Errorf("watch ended: %v; run again with --since %d to catch up", err, last)
 }
 
-// watchSource is the running sync's archiver.
+// watchSource is the running sync's archivers.
 type watchSource interface {
 	Subscribe() (<-chan archiver.Message, func())
 	MessagesSince(since int64) []archiver.Message
+}
+
+// watchSource is the accounts sel names (all for "") as one source.
+func (s *session) watchSource(sel string) (watchSource, error) {
+	list, err := s.reg.Filter(sel)
+	if err != nil {
+		return nil, err
+	}
+	var src multiSource
+	for _, a := range list {
+		for _, acct := range s.accounts {
+			if acct.JID == a.JID && acct.wa.IsAuthed() {
+				src = append(src, acct.arc)
+			}
+		}
+	}
+	if len(src) == 0 {
+		return nil, errors.New("no linked account to watch")
+	}
+	return src, nil
+}
+
+// multiSource merges several accounts' changes.
+type multiSource []watchSource
+
+// Subscribe merges the accounts' streams; it closes when any of them does
+// (that subscriber fell behind, or the sync is stopping).
+func (m multiSource) Subscribe() (<-chan archiver.Message, func()) {
+	out := make(chan archiver.Message)
+	done := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(done) }) }
+	var wg sync.WaitGroup
+	var cancels []func()
+	for _, a := range m {
+		ch, cancel := a.Subscribe()
+		cancels = append(cancels, cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				case msg, ok := <-ch:
+					if !ok {
+						stop()
+						return
+					}
+					select {
+					case out <- msg:
+					case <-done:
+						return
+					}
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out, func() {
+		stop()
+		for _, c := range cancels {
+			c()
+		}
+	}
+}
+
+// MessagesSince is every account's, oldest first.
+func (m multiSource) MessagesSince(since int64) []archiver.Message {
+	var out []archiver.Message
+	for _, a := range m {
+		out = append(out, a.MessagesSince(since)...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At < out[j].At })
+	return out
 }
 
 // serveWatch streams changes to a `wacli watch` until it leaves, the sync

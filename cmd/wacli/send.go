@@ -21,6 +21,7 @@ import (
 
 func newSendCmd(f *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{Use: "send", Short: "Send a message; it is archived like any other"}
+	addAccountFlag(cmd, f, "the WhatsApp account to send from, needed when several are linked")
 
 	var to, message string
 	var escapes bool
@@ -31,7 +32,7 @@ func newSendCmd(f *rootFlags) *cobra.Command {
 			if escapes {
 				message = strings.NewReplacer(`\n`, "\n", `\r`, "\r", `\t`, "\t").Replace(message)
 			}
-			res, err := execute(f, request{Op: "send", To: to, Text: message})
+			res, err := execute(f, request{Op: "send", Account: f.account, To: to, Text: message})
 			return printResult(f, res, err)
 		},
 	}
@@ -50,7 +51,7 @@ func newSendCmd(f *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := execute(f, request{Op: "send", To: fileTo, File: abs, Caption: caption})
+			res, err := execute(f, request{Op: "send", Account: f.account, To: fileTo, File: abs, Caption: caption})
 			return printResult(f, res, err)
 		},
 	}
@@ -78,7 +79,7 @@ func printResult(f *rootFlags, res any, err error) error {
 	return out.WriteJSON(os.Stdout, res)
 }
 
-func doSend(ctx context.Context, s *session, r request) (any, error) {
+func doSend(ctx context.Context, s *account, r request) (any, error) {
 	if err := s.waitLoggedIn(ctx); err != nil { // also in a sync that is reconnecting
 		return nil, err
 	}
@@ -103,7 +104,7 @@ func doSend(ctx context.Context, s *session, r request) (any, error) {
 
 // mediaMessage uploads the file and returns the message to send, and the
 // file's bytes for the archive.
-func mediaMessage(ctx context.Context, s *session, path, caption string) (*waE2E.Message, []byte, error) {
+func mediaMessage(ctx context.Context, s *account, path, caption string) (*waE2E.Message, []byte, error) {
 	// Read in the sync, which must not block on a pipe or fill its memory.
 	if st, err := os.Stat(path); err != nil {
 		return nil, nil, err

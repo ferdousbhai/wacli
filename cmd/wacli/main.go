@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"syscall"
-	"time"
 
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/config"
@@ -27,6 +26,7 @@ type rootFlags struct {
 	dateFormat string
 	typedDate  bool // --date-format was given, not just WACLI_DATE_FORMAT
 	asJSON     bool
+	account    string // --account, on the commands that take it
 }
 
 // errUnlinked exits with exitUnlinked so a service manager stops restarting
@@ -64,9 +64,10 @@ func newRoot() *cobra.Command {
 		Use:   "wacli",
 		Short: "Keep WhatsApp chats as iPhone-style export folders",
 		Long: `wacli links to WhatsApp as a companion device and keeps every chat as a
-folder shaped like an iPhone "Export chat → Attach Media" export:
+folder shaped like an iPhone "Export chat → Attach Media" export, in a
+folder per linked account (named after its number until you rename it):
 
-  ~/WhatsApp/WhatsApp Chat - <name>/_chat.txt  (+ media files)
+  ~/WhatsApp/<account>/WhatsApp Chat - <name>/_chat.txt  (+ media files)
 
 Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		Version:       version,
@@ -94,8 +95,8 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 			return nil
 		},
 	}
-	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp session (session.db)")
-	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the chat folders")
+	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp sessions (one folder per account)")
+	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the account folders, each with its chat folders")
 	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", os.Getenv("WACLI_DATE_FORMAT"), "Go time layout for entry timestamps, matching your phone's region; an archive keeps the one it was started with (default "+strconv.Quote(archive.DefaultDateFormat)+")")
 	root.PersistentFlags().BoolVar(&f.asJSON, "json", false, "print machine-readable JSON")
 
@@ -153,25 +154,6 @@ func defaultArchiveDir() string {
 		return "WhatsApp"
 	}
 	return filepath.Join(home, "WhatsApp")
-}
-
-// openArchive opens the archive; readOnly for commands that may run next to
-// the sync process that owns the files.
-func (f *rootFlags) openArchive(readOnly bool) (*archive.Archive, error) {
-	if f.dateFormat != "" { // "": the archive's own, or the default
-		if err := archive.ValidDateFormat(f.dateFormat); err != nil {
-			// Typed, or setting up a new archive (it would decide the
-			// format for good): an error. Otherwise, below.
-			if f.typedDate || !archive.Exists(f.archiveDir) {
-				return nil, err
-			}
-			// From the environment, maybe a service's: not worth failing a
-			// start over, as the archive's own format is used anyway.
-			logf("note: ignoring WACLI_DATE_FORMAT: %v", err)
-			f.dateFormat = ""
-		}
-	}
-	return archive.Open(archive.Options{Root: f.archiveDir, DateFormat: f.dateFormat, Location: time.Local, Logf: logf, ReadOnly: readOnly})
 }
 
 func signalContext() (context.Context, context.CancelFunc) {

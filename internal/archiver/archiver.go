@@ -109,8 +109,15 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 // Start begins handling events, downloading media, refreshing names and
 // reporting status, until Close.
 func (a *Archiver) Start(ctx context.Context) {
-	a.ctx, a.cancel = context.WithCancel(ctx)
+	a.Run(ctx)
 	a.wa.AddEventHandler(a.handle)
+}
+
+// Run is Start without taking events from the client: the caller passes
+// them to Handle. A new link learns which account (so which archive) it is
+// only once it has paired, from inside an event handler.
+func (a *Archiver) Run(ctx context.Context) {
+	a.ctx, a.cancel = context.WithCancel(ctx)
 	a.background(a.media.run)
 	a.background(a.reportStatus)
 	a.background(a.refreshNamesLoop)
@@ -176,6 +183,9 @@ func (a *Archiver) PendingMedia() int { return a.media.len() }
 // WaitMedia blocks until everything downloadable now is downloaded, or ctx
 // ends (auth and sync wait for the whole queue).
 func (a *Archiver) WaitMedia(ctx context.Context) { a.media.wait(ctx, a.media.keys()) }
+
+// Handle archives one whatsmeow event (see Run).
+func (a *Archiver) Handle(evt any) { a.handle(evt) }
 
 func (a *Archiver) handle(evt any) {
 	a.handling.RLock()

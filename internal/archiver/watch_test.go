@@ -46,7 +46,7 @@ func TestWatchPublishesLiveMessagesEditsAndDeletesOnceOnDisk(t *testing.T) {
 	a.handle(live(dana, dana, "M1", false, t0, text("Thanks")))
 	m := next(t, ch)
 	c, _ := ar.Chat(dana)
-	want := Message{ID: "M1", Thread: dana, Chat: c.Name(), At: t0 * 1000, From: "Dana Putri", Kind: "text", Text: "Thanks", Ref: filepath.Join(c.Dir(), "_chat.txt")}
+	want := Message{Account: filepath.Base(ar.Root()), ID: "M1", Thread: dana, Chat: c.Name(), At: t0 * 1000, From: "Dana Putri", Kind: "text", Text: "Thanks", Ref: filepath.Join(c.Dir(), "_chat.txt")}
 	if m != want {
 		t.Fatalf("got  %+v\nwant %+v", m, want)
 	}

@@ -73,7 +73,7 @@ func TestWatchPrintsTheContract(t *testing.T) {
 	src := &fakeSource{
 		ch: make(chan archiver.Message, 8),
 		since: []archiver.Message{
-			{ID: "C1", Thread: "6281111111111@s.whatsapp.net", Chat: "Dana Putri", At: 1000, From: "Dana Putri", Kind: "text", Text: "while you were away", Ref: "/a/WhatsApp Chat - Dana Putri/_chat.txt"},
+			{Account: "Personal", ID: "C1", Thread: "6281111111111@s.whatsapp.net", Chat: "Dana Putri", At: 1000, From: "Dana Putri", Kind: "text", Text: "while you were away", Ref: "/a/Personal/WhatsApp Chat - Dana Putri/_chat.txt"},
 		},
 	}
 	src.ch <- archiver.Message{ID: "C1", Thread: "6281111111111@s.whatsapp.net", At: 1000, Kind: "text"} // caught up already
@@ -101,7 +101,7 @@ func TestWatchPrintsTheContract(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("printed %q", lines)
 	}
-	want := `{"source":"whatsapp","id":"C1","thread":"6281111111111@s.whatsapp.net","chat":"Dana Putri","at":1000,"from":"Dana Putri","from_me":false,"kind":"text","text":"while you were away","media":"","ref":"/a/WhatsApp Chat - Dana Putri/_chat.txt"}`
+	want := `{"source":"whatsapp","account":"Personal","id":"C1","thread":"6281111111111@s.whatsapp.net","chat":"Dana Putri","at":1000,"from":"Dana Putri","from_me":false,"kind":"text","text":"while you were away","media":"","ref":"/a/Personal/WhatsApp Chat - Dana Putri/_chat.txt"}`
 	if lines[0] != want {
 		t.Errorf("line:\n%s\nwant:\n%s", lines[0], want)
 	}

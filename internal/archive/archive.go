@@ -1589,3 +1589,39 @@ func (a *Archive) writeFile(path string, fill func(w *bufio.Writer) error) error
 // TmpDir is where wacli keeps temp files: inside the archive, so renames
 // into place stay on one filesystem.
 func (a *Archive) TmpDir() string { return a.metaPath("tmp") }
+
+// Folders lists the chat folders root's chats.json records, with any whose
+// rename is still in flight under both names: what wacli owns in root.
+func Folders(root string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(root, metaDir, chatsFile))
+	if err != nil {
+		return nil, err
+	}
+	var meta map[string]*ChatInfo
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("%s: %w", chatsFile, err)
+	}
+	var out []string
+	for _, info := range meta {
+		for _, f := range []string{info.Folder, info.PrevFolder} {
+			if f != "" && filepath.Base(f) == f {
+				out = append(out, f)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// RecordedDateFormat is the date format root's lines are written in, as
+// recorded, or "".
+func RecordedDateFormat(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, metaDir, formatFile))
+	if err != nil {
+		return ""
+	}
+	if f := strings.TrimRight(string(data), "\r\n"); ValidDateFormat(f) == nil {
+		return f
+	}
+	return ""
+}

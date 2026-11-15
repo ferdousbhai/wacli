@@ -8,29 +8,67 @@ messages keep arriving. There is no message database: the folders are the data.
 
 ```
 ~/WhatsApp/                                   archive root (--archive, WACLI_ARCHIVE_DIR)
-  WhatsApp Chat - Maya/
-    _chat.txt
-    00000012-PHOTO-2025-10-24-05-33-09.jpg
-    00000039-Restructuring Invoice - PT. Acme Holding.pdf
-  WhatsApp Chat - Maya (+628110000000)/       name collision → number suffix
-    _chat.txt
-  .wacli/                                     bookkeeping, never needed to read chats
-    chats.json                                JID → folder, chat kind, names
-    date-format                               the --date-format its lines are written in (used from then on)
-    index/<jid>.tsv                           one row per _chat.txt entry, same order:
-                                              msg id, unix ts, from_me, sender JID
-    index/<jid>.tsv.orphaned-<time>           index set aside when a chat folder went missing
-    pending-media.json                        media not downloaded yet (keys to retry), and media given up on
-    refetched.json                            empty lines whose type the phone told (`wacli refetch`)
-    status.json                               written by a running sync; read by `wacli doctor`
-    deleted/<folder>/                         media of messages later deleted for everyone
-    names-scanned                             marks the one-time pass that named old chats
-    tmp/                                      downloads and file writes in progress
+  +15551234567/                               one folder per account: its number until renamed
+    WhatsApp Chat - Maya/
+      _chat.txt
+      00000012-PHOTO-2025-10-24-05-33-09.jpg
+      00000039-Restructuring Invoice - PT. Acme Holding.pdf
+    WhatsApp Chat - Maya (+628110000000)/     name collision → number suffix
+      _chat.txt
+    .wacli/                                   bookkeeping, never needed to read chats
+      account                                 the account's JID: how a renamed folder is found
+      chats.json                              JID → folder, chat kind, names
+      date-format                             the --date-format its lines are written in (used from then on)
+      index/<jid>.tsv                         one row per _chat.txt entry, same order:
+                                                msg id, unix ts, from_me, sender JID
+      index/<jid>.tsv.orphaned-<time>         index set aside when a chat folder went missing
+      pending-media.json                      media not downloaded yet (keys to retry), and media given up on
+      refetched.json                          empty lines whose type the phone told (`wacli refetch`)
+      status.json                             written by a running sync; read by `wacli doctor`
+      deleted/<folder>/                       media of messages later deleted for everyone
+      names-scanned                           marks the one-time pass that named old chats
+      tmp/                                    downloads and file writes in progress
 ~/.local/state/wacli/                         session store (--store, WACLI_STORE_DIR)
-  session.db                                  WhatsApp login + Signal keys (whatsmeow)
-  LOCK                                        held by the one process using the session
-  .send.sock                                  where a running sync takes send/backfill/refetch/import
+  accounts.json                               each account: JID, archive folder, store folder
+  +15551234567/session.db                     an account's WhatsApp login + Signal keys (whatsmeow)
+  pending/session.db                          a link in progress, before its number is known
+  LOCK                                        held by the one process using the sessions
+  .send.sock                                  where a running sync takes send/backfill/refetch/import/watch
 ```
+
+Everything under an account folder is laid out as the archive root was before
+accounts: each account is a complete archive of its own, with its own
+`.wacli/`.
+
+### Accounts
+
+- An account folder is named after the account's number (`+15551234567`; `"+…
+  (2)"` if a folder that isn't this account's has the name). The owner may
+  rename it. `accounts.json` records the name; when that folder's
+  `.wacli/account` doesn't name the account, wacli looks through the archive's
+  folders for the one that does and records it (logging the change). So a
+  rename is followed by any command; stop the sync before renaming, since the
+  running one keeps writing to the path it started with.
+- A new account (`wacli auth`) pairs in `pending/`; once paired, its archive
+  folder is made and history goes there. When auth ends, the session moves to
+  `+<number>/` (finished by the next command if auth was interrupted).
+  Relinking an account that was logged out reuses its folder; the unlinked
+  old session is replaced.
+- Upgrading from the single-account layout (`session.db` at the top of the
+  store, chat folders and `.wacli/` at the top of the archive): under the
+  store lock, wacli reads the session's JID (checkpointing its WAL), records
+  the account in `accounts.json` with what is still to move, then renames the
+  session files into `+<number>/` (the database last) and the chat folders
+  `chats.json` lists, then `.wacli/`, into the account folder. Only renames
+  within the same directory, so the same filesystem; nothing is copied or
+  deleted, and other files at the top of the archive stay. An interrupted
+  move is finished by the next command (the record says what's left); a
+  finished one does nothing. Read-only commands do it too, unless another
+  wacli (an older sync) holds the lock: they then say to restart it.
+- An unlinked single-account session has no number to move under: its chat
+  folders stay at the top until `wacli auth` links the first account, which
+  takes them (relinking used to continue the same archive). `doctor` reports
+  them otherwise.
 
 The index exists only because WhatsApp refers to earlier messages by ID (edits,
 deletes, backfill anchors) and the export format has no IDs. Row *i* of the

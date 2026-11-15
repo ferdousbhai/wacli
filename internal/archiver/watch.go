@@ -14,16 +14,17 @@ import (
 // Message is one archived message, or a change to one, as `wacli watch`
 // prints it. Its files are on disk when it is published.
 type Message struct {
-	ID     string `json:"id"`     // the message ID; an edit or delete adds ":edit-<ms>" / ":delete-<ms>"
-	Thread string `json:"thread"` // the chat's JID (its archive key)
-	Chat   string `json:"chat"`   // the chat's name
-	At     int64  `json:"at"`     // unix ms: when it was sent, edited or deleted
-	From   string `json:"from"`   // sender name as written in _chat.txt
-	FromMe bool   `json:"from_me"`
-	Kind   string `json:"kind"` // text | media | system | edit | delete
-	Text   string `json:"text"`
-	Media  string `json:"media"` // absolute path of the attachment, or ""
-	Ref    string `json:"ref"`   // absolute path of the chat's _chat.txt
+	Account string `json:"account"` // the account's folder in the archive
+	ID      string `json:"id"`      // the message ID; an edit or delete adds ":edit-<ms>" / ":delete-<ms>"
+	Thread  string `json:"thread"`  // the chat's JID (its archive key)
+	Chat    string `json:"chat"`    // the chat's name
+	At      int64  `json:"at"`      // unix ms: when it was sent, edited or deleted
+	From    string `json:"from"`    // sender name as written in _chat.txt
+	FromMe  bool   `json:"from_me"`
+	Kind    string `json:"kind"` // text | media | system | edit | delete
+	Text    string `json:"text"`
+	Media   string `json:"media"` // absolute path of the attachment, or ""
+	Ref     string `json:"ref"`   // absolute path of the chat's _chat.txt
 }
 
 // mediaWait is how long a new media message waits for its download before
@@ -172,7 +173,8 @@ func messageFor(c *archive.Chat, id string) (Message, bool) {
 	}
 	dir := c.Dir()
 	m := Message{
-		ID: id, Thread: c.JID(), Chat: c.Name(), At: row.TS * 1000,
+		Account: filepath.Base(filepath.Dir(dir)),
+		ID:      id, Thread: c.JID(), Chat: c.Name(), At: row.TS * 1000,
 		From: e.Sender, FromMe: row.FromMe, Text: e.Text,
 		Ref: filepath.Join(dir, archive.ChatFile),
 	}
