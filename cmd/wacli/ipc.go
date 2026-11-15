@@ -17,7 +17,7 @@ import (
 // request is a unit of work any command can run itself or hand to a running
 // `wacli sync --follow`, which owns the WhatsApp connection.
 type request struct {
-	Op string `json:"op"` // send | backfill | refetch | import
+	Op string `json:"op"` // send | backfill | refetch | import | watch
 
 	To      string `json:"to,omitempty"`
 	Text    string `json:"text,omitempty"`
@@ -30,6 +30,8 @@ type request struct {
 	Count    int           `json:"count,omitempty"`
 	Requests int           `json:"requests,omitempty"`
 	Wait     time.Duration `json:"wait,omitempty"`
+
+	Since int64 `json:"since,omitempty"` // watch: unix ms to catch up from
 }
 
 type response struct {
@@ -120,6 +122,7 @@ func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
 	}
 	var wg sync.WaitGroup
 	accepting := make(chan struct{})
+	quit := make(chan struct{}) // ends watch streams, which never finish by themselves
 	go func() {
 		defer close(accepting)
 		for {
@@ -130,7 +133,7 @@ func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				handleConn(ctx, s, conn)
+				handleConn(ctx, s, conn, quit)
 			}()
 		}
 	}()
@@ -139,11 +142,12 @@ func serveIPC(ctx context.Context, f *rootFlags, s *session) (func(), error) {
 	return func() {
 		ln.Close()
 		<-accepting
+		close(quit)
 		wg.Wait()
 	}, nil
 }
 
-func handleConn(ctx context.Context, s *session, conn net.Conn) {
+func handleConn(ctx context.Context, s *session, conn net.Conn, quit <-chan struct{}) {
 	defer conn.Close()
 	var r request
 	dec := json.NewDecoder(conn)
@@ -161,6 +165,10 @@ func handleConn(ctx context.Context, s *session, conn net.Conn) {
 		_, _ = io.Copy(io.Discard, io.MultiReader(dec.Buffered(), conn))
 		cancel()
 	}()
+	if r.Op == "watch" {
+		serveWatch(ctx, quit, s.arc, conn, r.Since)
+		return
+	}
 	res, err := r.run(ctx, s)
 	resp := response{Result: res}
 	if err != nil {

@@ -31,6 +31,7 @@ type Archiver struct {
 	names          *names
 	media          *mediaQueue
 	status         *statusTracker
+	watch          *watchers
 	logf           func(format string, args ...any)
 
 	ctx    context.Context
@@ -78,6 +79,7 @@ func New(ar *archive.Archive, client *wa.Client, logf func(string, ...any)) (*Ar
 		requestHistory: client.RequestHistorySyncOnDemand,
 		names:          newNames(client),
 		status:         newStatusTracker(ar.Root()),
+		watch:          newWatchers(),
 		started:        time.Now(),
 		logf:           logf,
 		ctx:            context.Background(),
@@ -151,6 +153,7 @@ func (a *Archiver) Close() {
 	}
 	a.media.flush()
 	a.checked.save(a.ar.TmpDir(), a.logf)
+	a.watch.close()
 }
 
 func (a *Archiver) Added() int64 { return a.added.Load() }
@@ -430,7 +433,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 		}
 		edit := a.entryFor(ctx, pm, "") // a document's caption and label, as when sent
 		queued := a.media.name(c.JID(), pm.ID)
-		_, err := c.Update(pm.ID, func(e *archive.Entry) bool {
+		changed, err := c.Update(pm.ID, func(e *archive.Entry) bool {
 			if e.DocLabel == "" && e.Omitted == "document omitted" && queued != "" {
 				e.Text, e.DocLabel = archive.SplitDocLabel(e.Text, queued) // read back, the label is still in the text
 			}
@@ -443,7 +446,9 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 			e.Text, e.DocLabel, e.System, e.Edited = edit.Text, edit.DocLabel, edit.System, true
 			return true
 		})
-		a.wrote(b, c, err)
+		if a.wrote(b, c, err) && changed {
+			a.notify(b, c, pm.ID, "edit", pm.Timestamp)
+		}
 		return
 	case c.Has(pm.ID):
 		a.requeueMedia(ctx, b, c, pm)
@@ -494,7 +499,9 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 			a.needsNames(c.JID())
 		}
 	}
-	a.wrote(b, c, err)
+	if a.wrote(b, c, err) && inserted {
+		a.notify(b, c, pm.ID, "", pm.Timestamp)
+	}
 }
 
 // insert is c.Insert, or c.InsertOlder for a message from history (a batch).
@@ -542,16 +549,18 @@ func (a *Archiver) requeueMedia(ctx context.Context, b *batch, c *archive.Chat, 
 // wrote finishes a write: outside a history batch it makes sure the change
 // is on disk (the chat may be held by a batch on another goroutine) before
 // WhatsApp gets its acknowledgement.
-func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) {
+// It reports whether the write succeeded.
+func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) bool {
 	if err == nil && b == nil {
 		err = c.Flush()
 		a.media.flush() // its download, if any, is queued on disk too
 	}
 	if err != nil {
 		a.logf("warning: archive write failed: %v", err)
-		return
+		return false
 	}
 	a.touch()
+	return true
 }
 
 // unrendered notes, once per type, an edit wacli can't read: the message
@@ -671,10 +680,13 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 	if deletedByMe && pm.FromMe {
 		text = archive.DeletedByMe
 	}
+	prev, had := c.Get(pm.ID)
 	a.media.forget(c.JID(), pm.ID)
 	existed, err := c.MarkDeleted(pm.ID, text)
 	if existed || err != nil {
-		a.wrote(b, c, err)
+		if a.wrote(b, c, err) && existed && !(had && prev.Deleted != "") {
+			a.notify(b, c, pm.ID, "delete", pm.Timestamp)
+		}
 		return
 	}
 	// The original never reached us; keep the tombstone at deletion time.
@@ -693,7 +705,9 @@ func (a *Archiver) applyDelete(ctx context.Context, b *batch, c *archive.Chat, p
 			a.needsNames(c.JID()) // as in archiveMessage
 		}
 	}
-	a.wrote(b, c, err)
+	if a.wrote(b, c, err) && inserted {
+		a.notify(b, c, pm.ID, "delete", pm.Timestamp)
+	}
 }
 
 // chat returns the archive chat for jid, creating its folder on first use.

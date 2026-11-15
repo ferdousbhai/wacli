@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New `watch`: prints each new, edited or deleted message as one JSON line (`source`, `id`, `thread`, `chat`, `at`, `from`, `from_me`, `kind`, `text`, `media`, `ref`) once the running `sync --follow` has written it, so agents get messages as they arrive instead of polling files. A media message waits for its file (up to a minute). `--since <unix ms>` first replays archived messages from then, `--chat` keeps one chat, `--include-mine` adds your own messages. It uses the sync's connection; it exits non-zero when no sync is running or the sync stops, naming the `--since` to resume from. The running sync must be this version. No change to the archive.
+
 ## 0.26.2 - 2026-10-30
 
 - Install on Omarchy/Arch (x86_64 and aarch64) from a signed pacman repository: `curl -fsSL https://ferdousbhai.com/wacli/install.sh | sudo bash`. The `wacli` package ships `/usr/bin/wacli` and the `wacli-sync` systemd user service (enable it after `wacli auth`); updates come with `omarchy update`. `go install` remains the way elsewhere. No change to the archive, its times or sync.

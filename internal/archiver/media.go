@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -132,6 +133,7 @@ func (q *mediaQueue) forget(chat, id string) {
 	delete(q.items, chat+"|"+id)
 	q.saveLocked()
 	q.mu.Unlock()
+	q.a.mediaDone(chat, id)
 }
 
 // len counts the attachments still to download.
@@ -267,6 +269,12 @@ func (q *mediaQueue) settle() {
 		q.mu.Unlock()
 		if err != nil {
 			q.a.logf("warning: %v", err)
+			continue
+		}
+		for _, k := range keys {
+			if _, id, ok := strings.Cut(k, "|"); ok {
+				q.a.mediaDone(jid, id)
+			}
 		}
 	}
 }
@@ -366,11 +374,13 @@ func (q *mediaQueue) download(ctx context.Context, p *pendingMedia) {
 			return // shutting down or offline: not the file's fault; stays queued
 		}
 		q.failed(p, err, askedPhone)
+		q.a.mediaDone(p.Chat, p.ID) // published without the file; it may come later
 		return
 	}
 	if _, err := c.PlaceAttachment(p.ID, tmp, p.Name); err != nil {
 		_ = os.Remove(tmp)
 		q.failed(p, err, askedPhone)
+		q.a.mediaDone(p.Chat, p.ID)
 		return
 	}
 	q.mu.Lock()

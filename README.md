@@ -89,11 +89,18 @@ wacli backfill --all        # ask the phone for anything older it still has
 wacli import "WhatsApp Chat - Maya.zip"   # merge a phone export for anything it won't send
 wacli send text --to "+14155551212" --message "Running late"
 wacli send file --to "Maya" --file invoice.pdf --caption "Invoice"
+wacli watch                 # new messages as JSON lines, as the sync archives them
 wacli doctor
 ```
 
 `send`, `backfill`, `refetch` and `import` hand their work to a running `sync --follow`,
 so they work while the service is up and what you send lands in the archive.
+
+`watch` follows that sync too: one JSON object per line for each new, edited or
+deleted message, printed once it is on disk (`ref` is the chat's `_chat.txt`,
+`media` the attachment, if any). `--since <unix ms>` catches up first; your
+own messages are left out unless `--include-mine`. See
+[docs/commands.md](docs/commands.md#watch).
 
 The Arch package ships the `wacli-sync` service (enable it as above). With a
 `go install` build, add it as a systemd user service yourself:

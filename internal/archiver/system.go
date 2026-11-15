@@ -119,7 +119,9 @@ func (a *Archiver) archiveSystem(ctx context.Context, b *batch, chatJID types.JI
 		b.inserted(c)
 		a.added.Add(1)
 	}
-	a.wrote(b, c, err)
+	if a.wrote(b, c, err) && inserted {
+		a.notify(b, c, id, "", ts)
+	}
 }
 
 // archiveGroupInfo records live group changes that exports show.

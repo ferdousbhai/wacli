@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure
-- `cmd/wacli/`: CLI (auth, sync, backfill, refetch, import, chats, send, doctor, logout, skill) and the IPC that lets `send`/`backfill`/`refetch`/`import` run inside a running `sync --follow`.
+- `cmd/wacli/`: CLI (auth, sync, backfill, refetch, import, chats, send, watch, doctor, logout, skill) and the IPC that lets `send`/`backfill`/`refetch`/`import` run inside a running `sync --follow` and `watch` stream from it.
 - `internal/archive/`: the data. Chat folders shaped like iPhone exports (`_chat.txt` + media), the iOS line format (render/parse), per-chat ID index, holds/flushes, repair, import merge. No whatsmeow dependency.
 - `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, backfill paging, name refresh, status.json.
 - `internal/wa/`: whatsmeow client wrapper and message parsing (only what the archiver and send use).

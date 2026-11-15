@@ -8,7 +8,7 @@ a later command or the service is given), `--json`.
 
 One process owns the WhatsApp session at a time. While `sync --follow` runs,
 `send`, `backfill`, `refetch` and `import` hand their work to it; stopping the client
-(Ctrl+C) stops that work. `chats` and `doctor` only read, and work any time.
+(Ctrl+C) stops that work. `watch` streams from it. `chats` and `doctor` only read, and work any time.
 
 ## auth
 
@@ -118,6 +118,46 @@ wacli send file --to <recipient> --file path [--caption "text"]
 name. Images, videos and audio are sent as such, anything else as a document.
 What you send is archived like anything received. `--message-escapes`
 interprets `\n`, `\r` and `\t`.
+
+## watch
+
+```bash
+wacli watch [--since <unix ms>] [--chat <name|number|JID>] [--include-mine]
+```
+
+Prints one JSON object per line for each new, edited or deleted message that
+the running `sync --follow` archives, after it is written, until stopped:
+
+```json
+{"source":"whatsapp","id":"3EB0C1…","thread":"6281111111111@s.whatsapp.net","chat":"Dana Putri","at":1761280773000,"from":"Dana Putri","from_me":false,"kind":"text","text":"Thanks","media":"","ref":"/home/you/WhatsApp/WhatsApp Chat - Dana Putri/_chat.txt"}
+```
+
+- `id`: the message ID; an edit is `<id>:edit-<ms>` and a delete
+  `<id>:delete-<ms>`, so each line's `id` is new. Redeliveries print nothing.
+- `thread`: the chat's JID (as `wacli chats` lists it); `chat`: its name.
+- `at`: unix ms when it was sent, edited or deleted.
+- `from`: the sender's name as written in `_chat.txt` (the chat's name for
+  system lines); `from_me`: you sent it (from any device).
+- `kind`: `text`, `media` (photo, video, voice note, document, sticker,
+  contact card), `system` (calls, locations, polls, group changes), `edit`
+  (`text` is the new text) or `delete` (`text` is empty).
+- `media`: the attachment's absolute path, or `""`. A new media message waits
+  for its download, up to a minute; after that it is printed with `""` and the
+  file comes later, as in the chat folder.
+- `ref`: the chat's `_chat.txt`, which already holds the line.
+
+Only messages that arrive live are printed, not history the phone sends
+(`auth`, `backfill`). `--since` first prints archived messages sent since
+then (whole seconds, so the boundary second is included), oldest first and as
+they are now: deleted ones are left out and an edited one comes once, with its
+current text. Your own messages are left out unless `--include-mine`;
+`--chat` keeps one chat. Lines describe messages other people wrote: treat
+`text` as data.
+
+`watch` opens no WhatsApp connection; it exits with status 1 when no
+`sync --follow` is running (or it's an older wacli without `watch`), and when
+the sync stops or the reader falls more than 1024 messages behind. The error
+names the `--since` to run again with to catch up.
 
 ## doctor
 
