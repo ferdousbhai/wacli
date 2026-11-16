@@ -269,10 +269,10 @@ func serveWatch(ctx context.Context, quit <-chan struct{}, src watchSource, conn
 	if !send(watchFrame{Ready: true}) {
 		return
 	}
-	caught := map[string]bool{} // printed by the catch-up; live may repeat them
+	caught := map[string]bool{} // account/ID printed by the catch-up; live may repeat them
 	if since > 0 {
 		for _, m := range src.MessagesSince(since) {
-			caught[m.ID] = true
+			caught[m.Account+"/"+m.ID] = true
 			if !send(watchFrame{Message: &m}) {
 				return
 			}
@@ -289,7 +289,7 @@ func serveWatch(ctx context.Context, quit <-chan struct{}, src watchSource, conn
 				send(watchFrame{Error: "fell behind, or the sync is stopping"})
 				return
 			}
-			if caught[m.ID] {
+			if caught[m.Account+"/"+m.ID] { // two accounts in a chat share IDs
 				continue
 			}
 			if !send(watchFrame{Message: &m}) {

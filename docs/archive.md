@@ -46,9 +46,10 @@ accounts: each account is a complete archive of its own, with its own
   (2)"` if a folder that isn't this account's has the name). The owner may
   rename it. `accounts.json` records the name; when that folder's
   `.wacli/account` doesn't name the account, wacli looks through the archive's
-  folders for the one that does and records it (logging the change). So a
-  rename is followed by any command; stop the sync before renaming, since the
-  running one keeps writing to the path it started with.
+  folders for the one that does. Every command follows a rename; one that takes
+  the store lock (sync, send, backfill, …) also records it, logging the
+  change. Stop the sync before renaming, since the running one keeps writing
+  to the path it started with.
 - A new account (`wacli auth`) pairs in `pending/`; once paired, its archive
   folder is made and history goes there. When auth ends, the session moves to
   `+<number>/` (finished by the next command if auth was interrupted).

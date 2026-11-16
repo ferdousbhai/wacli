@@ -76,7 +76,7 @@ func TestWatchPrintsTheContract(t *testing.T) {
 			{Account: "Personal", ID: "C1", Thread: "6281111111111@s.whatsapp.net", Chat: "Dana Putri", At: 1000, From: "Dana Putri", Kind: "text", Text: "while you were away", Ref: "/a/Personal/WhatsApp Chat - Dana Putri/_chat.txt"},
 		},
 	}
-	src.ch <- archiver.Message{ID: "C1", Thread: "6281111111111@s.whatsapp.net", At: 1000, Kind: "text"} // caught up already
+	src.ch <- archiver.Message{Account: "Personal", ID: "C1", Thread: "6281111111111@s.whatsapp.net", At: 1000, Kind: "text"} // caught up already
 	src.ch <- archiver.Message{ID: "M2", Thread: "120363000000000001@g.us", At: 2000, FromMe: true, Kind: "text"}
 	src.ch <- archiver.Message{ID: "M3", Thread: "120363000000000001@g.us", Chat: "Maya", At: 3000, From: "Kim", Kind: "media", Media: "/a/WhatsApp Chat - Maya/00000003-PHOTO.jpg", Ref: "/a/WhatsApp Chat - Maya/_chat.txt"}
 	quit := make(chan struct{})
@@ -108,6 +108,26 @@ func TestWatchPrintsTheContract(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(lines[1]), &m); err != nil || m["id"] != "M3" || m["media"] != "/a/WhatsApp Chat - Maya/00000003-PHOTO.jpg" {
 		t.Errorf("second line %q (own message M2 must be skipped)", lines[1])
+	}
+}
+
+// Two linked accounts in one group see its messages under the same IDs.
+func TestWatchCatchUpOfOneAccountKeepsTheOthersCopy(t *testing.T) {
+	src := &fakeSource{ch: make(chan archiver.Message, 8), since: []archiver.Message{{Account: "Personal", ID: "G1", Thread: "x@g.us", At: 1000}}}
+	src.ch <- archiver.Message{Account: "Personal", ID: "G1", Thread: "x@g.us", At: 1000}
+	src.ch <- archiver.Message{Account: "Work", ID: "G1", Thread: "x@g.us", At: 1000}
+	close(src.ch)
+	dir := fakeSync(t, src, make(chan struct{}))
+	var out syncWriter
+	watch(context.Background(), dir, watchOptions{Since: 500}, &out)
+	var got []string
+	for _, l := range out.lines() {
+		var m watchLine
+		json.Unmarshal([]byte(l), &m)
+		got = append(got, m.Account+"/"+m.ID)
+	}
+	if strings.Join(got, ",") != "Personal/G1,Work/G1" {
+		t.Errorf("printed %v", got)
 	}
 }
 

@@ -36,7 +36,7 @@ The chat is found from the export's name ("WhatsApp Chat - <name>.zip"); pass
 			if err != nil {
 				return err
 			}
-			res, err := runLocal(f, request{Op: "import", Account: f.account, File: path, Chat: chat})
+			res, err := execute(f, request{Op: "import", Account: f.account, File: path, Chat: chat})
 			if err != nil {
 				return err
 			}

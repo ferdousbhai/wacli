@@ -61,7 +61,9 @@ func (r request) run(ctx context.Context, s *session) (any, error) {
 	return doImport(ctx, a.ar, r, a.lidOf(ctx))
 }
 
-// execute runs r in this process, or in the running sync if it holds the store.
+// execute runs r in this process under the store lock, or in the running
+// sync if it holds the store, so the two never write at once. Import needs
+// the archive but not WhatsApp.
 func execute(f *rootFlags, r request) (any, error) {
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -73,29 +75,15 @@ func execute(f *rootFlags, r request) (any, error) {
 		return nil, err
 	}
 	defer s.close()
-	a := s.accounts[0]
-	if !a.wa.IsAuthed() {
-		return nil, fmt.Errorf("%s: %w", a.Label(), errUnlinked)
+	if r.Op != "import" {
+		a := s.accounts[0]
+		if !a.wa.IsAuthed() {
+			return nil, fmt.Errorf("%s: %w", a.Label(), errUnlinked)
+		}
+		if err := a.start(ctx, wa.ConnectOptions{}); err != nil {
+			return nil, err
+		}
 	}
-	if err := a.start(ctx, wa.ConnectOptions{}); err != nil {
-		return nil, err
-	}
-	return r.run(ctx, s)
-}
-
-// runLocal runs work that needs the archive but not WhatsApp: here under the
-// store lock, or in the running sync so the two never write at once.
-func runLocal(f *rootFlags, r request) (any, error) {
-	ctx, cancel := signalContext()
-	defer cancel()
-	s, err := openSession(f, one(r.Account))
-	if errors.Is(err, errBusy) {
-		return forward(ctx, f, r)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer s.close()
 	return r.run(ctx, s)
 }
 

@@ -82,7 +82,7 @@ func TestUpgradeMovesTheArchiveIntoTheAccountFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := reg.Select("")
+	a, err := reg.Select("", isLinked)
 	if err != nil || a.JID != "15551234567@s.whatsapp.net" || a.Folder != "+15551234567" {
 		t.Fatalf("%+v %v", a, err)
 	}
@@ -140,6 +140,15 @@ func TestSessionJIDOfAnUnlinkedStore(t *testing.T) {
 	os.WriteFile(empty, nil, 0o600)
 	if jid, err := sessionJID(empty); err != nil || jid != "" {
 		t.Errorf("empty: %q %v", jid, err)
+	}
+	if mayBeLinked(path) || mayBeLinked(empty) {
+		t.Error("an unlinked store may be replaced")
+	}
+	// One that can't be read is never taken for unlinked (and replaced).
+	broken := filepath.Join(t.TempDir(), "session.db")
+	os.WriteFile(broken, []byte(strings.Repeat("not a database ", 512)), 0o600)
+	if _, err := sessionJID(broken); err == nil || !mayBeLinked(broken) {
+		t.Errorf("broken store: %v", err)
 	}
 }
 

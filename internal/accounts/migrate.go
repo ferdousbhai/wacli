@@ -31,9 +31,10 @@ func (r *Registry) NeedsMigration(linked func(path string) bool) bool {
 // it is called only before anything moves. Every step is a rename, recorded
 // in the registry first, so an interrupted migration finishes on the next
 // call, and a finished one does nothing. It also finishes a pairing that
-// ended before its session reached its store folder (see Settle). Run it
-// under the store lock. It returns what it moved, to log.
-func (r *Registry) Migrate(jidOf func(path string) (string, error), unlinked func(path string) bool) ([]string, error) {
+// ended before its session reached its store folder (see Settle, which
+// linked is for). Run it under the store lock. It returns what it moved, to
+// log.
+func (r *Registry) Migrate(jidOf func(path string) (string, error), linked func(path string) bool) ([]string, error) {
 	if p, ok := r.LegacySession(); ok && !r.legacyInProgress() {
 		jid, err := jidOf(p)
 		if err != nil {
@@ -55,7 +56,7 @@ func (r *Registry) Migrate(jidOf func(path string) (string, error), unlinked fun
 	for i := range r.Accounts {
 		a := &r.Accounts[i]
 		if a.LegacyStore {
-			if err := r.moveLegacyStore(*a); err != nil {
+			if err := moveSession(r.StoreDir, filepath.Join(r.StoreDir, a.Store)); err != nil {
 				return notes, err
 			}
 			notes = append(notes, fmt.Sprintf("moved the session into %s", filepath.Join(r.StoreDir, a.Store)))
@@ -65,20 +66,14 @@ func (r *Registry) Migrate(jidOf func(path string) (string, error), unlinked fun
 			}
 		}
 		if a.LegacyArchive {
-			n, err := r.moveLegacyArchive(*a)
+			note, err := r.finishLegacyArchive(a)
 			if err != nil {
 				return notes, err
 			}
-			notes = append(notes, movedNote(n, r.ArchiveRoot(*a)))
-			a.LegacyArchive = false
-			if err := r.Save(); err != nil {
-				return notes, err
-			}
+			notes = append(notes, note)
 		}
-		if a.Store != Key(a.JID) {
-			if err := r.Settle(a.JID, unlinked); err != nil {
-				return notes, err
-			}
+		if err := r.Settle(a.JID, linked); err != nil {
+			return notes, err
 		}
 	}
 	return notes, nil
@@ -117,12 +112,22 @@ func (r *Registry) AdoptLegacyArchive(jid string) ([]string, error) {
 	if err := r.Save(); err != nil {
 		return nil, err
 	}
-	n, err := r.moveLegacyArchive(*a)
+	note, err := r.finishLegacyArchive(a)
 	if err != nil {
 		return nil, err
 	}
+	return []string{note}, nil
+}
+
+// finishLegacyArchive moves the top-level chat folders into a's folder and
+// records that it's done.
+func (r *Registry) finishLegacyArchive(a *Account) (string, error) {
+	n, err := r.moveLegacyArchive(*a)
+	if err != nil {
+		return "", err
+	}
 	a.LegacyArchive = false
-	return []string{movedNote(n, r.ArchiveRoot(*a))}, r.Save()
+	return movedNote(n, r.ArchiveRoot(*a)), r.Save()
 }
 
 // rename is os.Rename; tests stop it partway to interrupt a migration.
@@ -142,18 +147,19 @@ func moveFile(from, to string) (bool, error) {
 	return true, nil
 }
 
-func (r *Registry) moveLegacyStore(a Account) error {
-	dir := filepath.Join(r.StoreDir, a.Store)
-	if err := fsutil.EnsurePrivateDir(dir); err != nil {
+// moveSession moves a session's files from one store folder to another,
+// the database last (it marks the session as still in from).
+func moveSession(from, to string) error {
+	if err := fsutil.EnsurePrivateDir(to); err != nil {
 		return err
 	}
-	for _, name := range sessionFiles { // the database last
-		if _, err := moveFile(filepath.Join(r.StoreDir, name), filepath.Join(dir, name)); err != nil {
+	for _, name := range sessionFiles {
+		if _, err := moveFile(filepath.Join(from, name), filepath.Join(to, name)); err != nil {
 			return err
 		}
 	}
-	fsutil.Sync(r.StoreDir)
-	fsutil.Sync(dir)
+	fsutil.Sync(from)
+	fsutil.Sync(to)
 	return nil
 }
 
@@ -191,10 +197,11 @@ func (r *Registry) moveLegacyArchive(a Account) (int, error) {
 
 // Settle moves the session jid paired in (its Store, Pending for a new
 // link) into its own store folder, Key(jid), once the session is closed. A
-// session already there is replaced only if unlinked (relinking an account
-// that was logged out); its files are removed. Each step can be repeated, so
-// an interrupted Settle finishes on the next.
-func (r *Registry) Settle(jid string, unlinked func(path string) bool) error {
+// session already there is replaced only if it isn't linked (relinking an
+// account that was logged out); its files are removed. linked should count a
+// store it can't read as linked. Each step can be repeated, so an
+// interrupted Settle finishes on the next.
+func (r *Registry) Settle(jid string, linked func(path string) bool) error {
 	a, ok := r.Find(jid)
 	if !ok {
 		return fmt.Errorf("account %s isn't registered", Key(jid))
@@ -206,7 +213,7 @@ func (r *Registry) Settle(jid string, unlinked func(path string) bool) error {
 	from, to := filepath.Join(r.StoreDir, a.Store), filepath.Join(r.StoreDir, key)
 	if exists(filepath.Join(from, SessionFile)) {
 		if old := filepath.Join(to, SessionFile); exists(old) {
-			if !unlinked(old) {
+			if linked(old) {
 				return fmt.Errorf("%s is still linked; log it out first (`wacli logout --account %s`)", old, key)
 			}
 			for _, name := range sessionFiles { // the database last: it marks the old session as still there
@@ -215,15 +222,9 @@ func (r *Registry) Settle(jid string, unlinked func(path string) bool) error {
 				}
 			}
 		}
-		if err := fsutil.EnsurePrivateDir(to); err != nil {
+		if err := moveSession(from, to); err != nil {
 			return err
 		}
-		for _, name := range sessionFiles {
-			if _, err := moveFile(filepath.Join(from, name), filepath.Join(to, name)); err != nil {
-				return err
-			}
-		}
-		fsutil.Sync(to)
 	}
 	_ = os.Remove(from) // empty now; left if something else is in it
 	fsutil.Sync(r.StoreDir)

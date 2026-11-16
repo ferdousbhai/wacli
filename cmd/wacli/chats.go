@@ -414,8 +414,8 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 					fmt.Fprintf(w, "%s\t%v\n", strings.ToUpper(k), v)
 				}
 			}
-			for _, row := range rows {
-				fmt.Fprintf(w, "\nACCOUNT\t%s\n", accounts.Account{JID: row["jid"].(string), Folder: row["account"].(string)}.Label())
+			for i, row := range rows {
+				fmt.Fprintf(w, "\nACCOUNT\t%s\n", accs[i].Label())
 				for _, k := range []string{"archive", "linked", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "empty_lines_to_check", "date_format"} {
 					if v, ok := row[k]; ok {
 						fmt.Fprintf(w, "  %s\t%v\n", strings.ToUpper(k), v)

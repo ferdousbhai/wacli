@@ -16,7 +16,8 @@ Every linked WhatsApp account has a folder in the archive (named after its
 number, `+15551234567`, until you rename it) and a session in the store.
 `--account <number|folder name>` (env `WACLI_ACCOUNT`) chooses one; numbers
 match in any spelling (`+1 555 123 4567`, `15551234567`, the JID), folder
-names case-insensitively. With one account it is never needed. With several,
+names case-insensitively. With one linked account it is never needed (a
+logged-out one stays listed, for its folder, but isn't counted). With several,
 `send`, `backfill`, `refetch`, `import` and `logout` fail without it, listing
 the accounts; `chats`, `doctor` and `watch` show every account unless given
 one. `sync` always serves every linked account.
@@ -40,7 +41,9 @@ paired). Accounts linked before keep working; run it once per account. It
 needs the store to itself: stop a running sync first (`systemctl --user stop
 wacli-sync`) and start it again afterwards, so it serves the new account too.
 Linking an account that is linked already is refused (the extra link is
-removed again); one that was logged out picks up its old folder. It asks for
+removed again; if you removed this computer's link on the phone while no sync
+ran, `wacli logout --account A` first); one that was logged out picks up its
+old folder. It asks for
 a **full** history sync, as WhatsApp Desktop does. That request is part of
 the linking handshake, so it only applies to a new link: run `wacli logout`
 first to relink. History arrives in batches over several minutes; keep the phone
@@ -141,7 +144,6 @@ wacli send text [--account A] --to <recipient> --message "text" [--message-escap
 wacli send file [--account A] --to <recipient> --file path [--caption "text"]
 ```
 
-`--account` is the account to send from (needed with several).
 
 `--to` takes a phone number (`+14155551212`), a JID, or an archived chat's
 name. Images, videos and audio are sent as such, anything else as a document.

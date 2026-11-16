@@ -44,7 +44,7 @@ type picker func(*accounts.Registry) ([]accounts.Account, error)
 // one opens the account sel names (which may be "" with one account).
 func one(sel string) picker {
 	return func(r *accounts.Registry) ([]accounts.Account, error) {
-		a, err := r.Select(sel)
+		a, err := selectAccount(r, sel)
 		return []accounts.Account{a}, err
 	}
 }
@@ -97,7 +97,7 @@ func settleRegistry(f *rootFlags) (*accounts.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	notes, err := reg.Migrate(sessionJID, func(p string) bool { return !isLinked(p) })
+	notes, err := reg.Migrate(sessionJID, mayBeLinked)
 	if len(notes) > 0 {
 		logf("wacli now keeps one folder per WhatsApp account: %s", strings.Join(notes, "; "))
 	}
@@ -138,17 +138,23 @@ func openAccount(f *rootFlags, reg *accounts.Registry, a accounts.Account, clien
 	return acct, nil
 }
 
-// accountLog prefixes messages with the account when there may be several.
+// accountLog prefixes messages with the account's folder.
 func accountLog(a accounts.Account) func(string, ...any) {
 	return func(format string, args ...any) { logf("%s: "+format, append([]any{a.Folder}, args...)...) }
 }
 
-// account returns the open account sel names ("" with one).
-func (s *session) account(sel string) (*account, error) {
-	a, err := s.reg.Select(sel)
+// selectAccount is reg.Select, telling linked accounts by their session.
+func selectAccount(reg *accounts.Registry, sel string) (accounts.Account, error) {
+	a, err := reg.Select(sel, isLinked)
 	if errors.Is(err, accounts.ErrNone) {
-		return nil, errUnlinked
+		err = errUnlinked
 	}
+	return a, err
+}
+
+// account returns the open account sel names ("" with one linked).
+func (s *session) account(sel string) (*account, error) {
+	a, err := selectAccount(s.reg, sel)
 	if err != nil {
 		return nil, err
 	}
@@ -192,10 +198,8 @@ func (s *session) close() {
 		a.wa.Close()
 	}
 	for _, a := range s.accounts {
-		if a.Store != accounts.Key(a.JID) && s.reg != nil {
-			if err := s.reg.Settle(a.JID, func(p string) bool { return !isLinked(p) }); err != nil {
-				logf("warning: %v (wacli finishes it next time)", err)
-			}
+		if err := s.reg.Settle(a.JID, mayBeLinked); err != nil {
+			logf("warning: %v (wacli finishes it next time)", err)
 		}
 	}
 	if s.lock != nil {
@@ -243,8 +247,8 @@ func (a *account) ended() error {
 // runUntilIdle returns once nothing new has been archived for idle in any
 // of the accounts and the media that can be downloaded right now is on
 // disk. An account WhatsApp ends is left out (and said so); the error is
-// returned when it was the last.
-func runUntilIdle(ctx context.Context, live []*account, idle time.Duration) error {
+// returned when it was the last. It returns the accounts still running.
+func runUntilIdle(ctx context.Context, live []*account, idle time.Duration) ([]*account, error) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	// Idle counts from the login: linking, and a server busy reconnecting,
@@ -262,13 +266,12 @@ func runUntilIdle(ctx context.Context, live []*account, idle time.Duration) erro
 	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
-			return nil
+			return live, nil
 		case <-t.C:
 		}
 		var err error
-		live, err = dropEnded(live)
-		if err != nil {
-			return err
+		if live, err = dropEnded(live); err != nil {
+			return nil, err
 		}
 		var n int64
 		pending := 0
@@ -289,7 +292,7 @@ func runUntilIdle(ctx context.Context, live []*account, idle time.Duration) erro
 			}
 			if quiet() {
 				fmt.Fprintln(os.Stderr)
-				return nil
+				return live, nil
 			}
 		}
 	}
@@ -303,7 +306,7 @@ func dropEnded(live []*account) ([]*account, error) {
 	for _, a := range live {
 		if err := a.ended(); err != nil {
 			if len(live) > 1 {
-				logf("%s: %v", a.Label(), err)
+				logf("%s: %v; the other accounts carry on", a.Label(), err)
 			}
 			a.wa.Disconnect()
 			last = err

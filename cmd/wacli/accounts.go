@@ -101,10 +101,14 @@ func sessionJID(path string) (string, error) {
 	defer db.Close()
 	var jid string
 	err = db.QueryRow("SELECT jid FROM whatsmeow_device LIMIT 1").Scan(&jid)
-	if errors.Is(err, sql.ErrNoRows) || err != nil && !tableExists(db, "whatsmeow_device") {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
+		var n int // no table yet: never linked; any other failure is an error
+		if db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whatsmeow_device'").Scan(&n) == nil && n == 0 {
+			return "", nil
+		}
 		return "", err
 	}
 	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -117,7 +121,10 @@ func sessionJID(path string) (string, error) {
 	return j.ToNonAD().String(), nil
 }
 
-func tableExists(db *sql.DB, name string) bool {
-	var n int
-	return db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n) == nil && n > 0
+// mayBeLinked is whether a session store may still be linked; one that
+// can't be read counts as linked, so it is never replaced. Only under the
+// store lock, with the store closed.
+func mayBeLinked(path string) bool {
+	jid, err := sessionJID(path)
+	return err != nil || jid != ""
 }

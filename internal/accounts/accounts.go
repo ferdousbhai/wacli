@@ -1,5 +1,6 @@
 // Package accounts keeps track of the WhatsApp accounts wacli is linked to:
-// each has a session under the store (<store>/<store dir>/session.db) and a
+// each has a session under the store (<store>/<number>/session.db,
+// or pending/ while linking) and a
 // folder under the archive (<archive>/<folder>/, holding its chat folders).
 //
 // The list lives in <store>/accounts.json. Each account folder holds its
@@ -17,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/fsutil"
 )
 
@@ -148,7 +150,7 @@ func (r *Registry) freeFolder(jid string) string {
 			}
 		}
 		path := filepath.Join(r.ArchiveDir, name)
-		if id, _ := readID(path); !taken && (id == jid || !exists(path)) {
+		if id := readID(path); !taken && (id == jid || !exists(path)) {
 			return name
 		}
 	}
@@ -157,7 +159,7 @@ func (r *Registry) freeFolder(jid string) string {
 // Claim marks root as jid's account folder.
 func Claim(root, jid string) error {
 	dir := filepath.Join(root, metaDir)
-	if id, _ := readID(root); id == jid {
+	if readID(root) == jid {
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -170,12 +172,12 @@ func Claim(root, jid string) error {
 }
 
 // readID is the JID root's .wacli/account names ("" without one).
-func readID(root string) (string, error) {
+func readID(root string) string {
 	data, err := os.ReadFile(filepath.Join(root, metaDir, idFile))
 	if err != nil {
-		return "", err
+		return ""
 	}
-	return strings.TrimSpace(string(data)), nil
+	return strings.TrimSpace(string(data))
 }
 
 // Locate finds each account's folder: the registered one if it's the
@@ -191,7 +193,7 @@ func (r *Registry) Locate(save bool) ([]string, error) {
 		if a.LegacyArchive {
 			continue // the move puts it in place
 		}
-		id, _ := readID(filepath.Join(r.ArchiveDir, a.Folder))
+		id := readID(filepath.Join(r.ArchiveDir, a.Folder))
 		if id == a.JID {
 			continue
 		}
@@ -225,7 +227,7 @@ func (r *Registry) claims() map[string]string {
 		if !e.IsDir() {
 			continue
 		}
-		if id, err := readID(filepath.Join(r.ArchiveDir, e.Name())); err == nil && id != "" {
+		if id := readID(filepath.Join(r.ArchiveDir, e.Name())); id != "" {
 			if _, ok := out[id]; !ok {
 				out[id] = e.Name()
 			}
@@ -263,22 +265,37 @@ func (r *Registry) Filter(sel string) ([]Account, error) {
 	return nil, fmt.Errorf("no account %q; the accounts are %s", sel, r.list())
 }
 
-// Select returns the one account sel names; sel may be empty only when
-// there is a single account.
-func (r *Registry) Select(sel string) (Account, error) {
+// Select returns the one account sel names. sel may be empty when one
+// account is registered, or only one of several is linked (linked tells by
+// its session store); logged-out accounts stay registered for their folders.
+func (r *Registry) Select(sel string, linked func(path string) bool) (Account, error) {
 	list, err := r.Filter(sel)
 	if err != nil {
 		return Account{}, err
 	}
-	if len(list) > 1 {
-		return Account{}, fmt.Errorf("%d WhatsApp accounts are linked; choose one with --account (or WACLI_ACCOUNT): %s", len(list), r.list())
+	if len(list) == 1 {
+		return list[0], nil
 	}
-	return list[0], nil
+	var live []Account
+	for _, a := range list {
+		if linked(r.SessionPath(a)) {
+			live = append(live, a)
+		}
+	}
+	switch len(live) {
+	case 0:
+		return Account{}, ErrNone
+	case 1:
+		return live[0], nil
+	}
+	return Account{}, fmt.Errorf("%d WhatsApp accounts are linked; choose one with --account (or WACLI_ACCOUNT): %s", len(live), labels(live))
 }
 
-func (r *Registry) list() string {
+func (r *Registry) list() string { return labels(r.Accounts) }
+
+func labels(list []Account) string {
 	var names []string
-	for _, a := range r.Accounts {
+	for _, a := range list {
 		names = append(names, a.Label())
 	}
 	return strings.Join(names, ", ")
@@ -287,7 +304,7 @@ func (r *Registry) list() string {
 // LegacyArchive reports whether chat folders of the single-account layout
 // sit at the top of the archive.
 func (r *Registry) LegacyArchive() bool {
-	return exists(filepath.Join(r.ArchiveDir, metaDir, "chats.json"))
+	return archive.Exists(r.ArchiveDir)
 }
 
 // LegacySession is the single-account layout's session store, if there.

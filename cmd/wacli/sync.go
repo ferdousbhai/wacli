@@ -95,7 +95,7 @@ func runAuth(ctx context.Context, f *rootFlags, phone string, idle time.Duration
 		return errors.New("WhatsApp didn't confirm the link; run `wacli auth` again")
 	}
 	fmt.Fprintf(os.Stderr, "Linked %s. Archiving history into %s (keep the phone online)…\n", accounts.Key(acct.JID), acct.ar.Root())
-	if err := runUntilIdle(ctx, []*account{acct}, idle); err != nil {
+	if _, err := runUntilIdle(ctx, []*account{acct}, idle); err != nil {
 		return err
 	}
 	return report(f, acct.summary())
@@ -161,7 +161,8 @@ func (l *linking) paired(jid string) {
 	reg := l.s.reg
 	if a, ok := reg.Find(jid); ok {
 		if a.Store != accounts.Pending && isLinked(reg.SessionPath(*a)) {
-			l.err = fmt.Errorf("%w as %s; this extra link is removed", errAlreadyLinked, a.Label())
+			// Or removed on the phone while no sync ran to hear of it.
+			l.err = fmt.Errorf("%w as %s, so this extra link is removed; if you removed it on the phone, run `wacli logout --account %s` first, then `wacli auth` again", errAlreadyLinked, a.Label(), accounts.Key(a.JID))
 			return
 		}
 		a.Store = accounts.Pending // relinking one that was logged out
@@ -220,7 +221,7 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 				}
 			}
 			if !follow {
-				if err := runUntilIdle(ctx, live, idle); err != nil {
+				if live, err = runUntilIdle(ctx, live, idle); err != nil {
 					return err
 				}
 				var sums []map[string]any
@@ -252,34 +253,21 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 func runFollowing(ctx context.Context, live []*account) error {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	var last error
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
 		}
-		var kept []*account
 		for _, a := range live {
-			err := a.ended()
-			if err == nil {
-				kept = append(kept, a)
-				continue
-			}
-			if !errors.Is(err, errUnlinked) && !errors.Is(err, errHalted) {
+			if err := a.ended(); err != nil && !errors.Is(err, errUnlinked) && !errors.Is(err, errHalted) {
 				return fmt.Errorf("%s: %w", a.Label(), err)
 			}
-			if len(live) == 1 {
-				return err
-			}
-			logf("%s: %v; the other accounts carry on", a.Label(), err)
-			a.wa.Disconnect()
-			last = err
 		}
-		if len(kept) == 0 {
-			return last
+		var err error
+		if live, err = dropEnded(live); err != nil {
+			return err
 		}
-		live = kept
 	}
 }
 

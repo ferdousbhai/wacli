@@ -66,7 +66,8 @@ func jidOf(want string) func(string) (string, error) {
 	return func(string) (string, error) { return want, nil }
 }
 
-func unlinked(string) bool { return true }
+// noneLinked is the linked callback when no session store is linked.
+func noneLinked(string) bool { return false }
 
 var migrated = map[string]string{
 	"+15551234567/.wacli/account":                          alex + "\n",
@@ -118,7 +119,7 @@ func TestMigrateMovesTheSingleAccountLayoutOnce(t *testing.T) {
 	if !r.NeedsMigration(func(string) bool { return true }) {
 		t.Fatal("old layout not noticed")
 	}
-	notes, err := r.Migrate(jidOf(alex), unlinked)
+	notes, err := r.Migrate(jidOf(alex), noneLinked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestMigrateMovesTheSingleAccountLayoutOnce(t *testing.T) {
 	if r.NeedsMigration(func(string) bool { return true }) {
 		t.Error("still needs migrating")
 	}
-	notes, err = r.Migrate(func(string) (string, error) { t.Fatal("session read again"); return "", nil }, unlinked)
+	notes, err = r.Migrate(func(string) (string, error) { t.Fatal("session read again"); return "", nil }, noneLinked)
 	if err != nil || len(notes) != 0 {
 		t.Errorf("second run: %q %v", notes, err)
 	}
@@ -153,7 +154,7 @@ func TestMigrateInterruptedAnywhereFinishesLater(t *testing.T) {
 			return os.Rename(from, to)
 		}
 		r, _ := Load(store, arch)
-		_, err := r.Migrate(jidOf(alex), unlinked)
+		_, err := r.Migrate(jidOf(alex), noneLinked)
 		rename = os.Rename
 		if err == nil {
 			if stopAt < 4 {
@@ -167,7 +168,7 @@ func TestMigrateInterruptedAnywhereFinishesLater(t *testing.T) {
 			t.Fatalf("stop %d: unfinished move not noticed", stopAt)
 		}
 		// The session is read once, before anything moves.
-		if _, err := r.Migrate(func(string) (string, error) { return "", errors.New("read again") }, unlinked); err != nil {
+		if _, err := r.Migrate(func(string) (string, error) { return "", errors.New("read again") }, noneLinked); err != nil {
 			t.Fatalf("stop %d: resume: %v", stopAt, err)
 		}
 		checkMigrated(t, store, arch)
@@ -180,7 +181,7 @@ func TestUnlinkedLegacySessionStaysAndItsChatsGoToTheNextLink(t *testing.T) {
 	if r.NeedsMigration(func(string) bool { return false }) {
 		t.Error("an unlinked session has no account to move into")
 	}
-	if notes, err := r.Migrate(jidOf(""), unlinked); err != nil || len(notes) != 0 {
+	if notes, err := r.Migrate(jidOf(""), noneLinked); err != nil || len(notes) != 0 {
 		t.Fatalf("%q %v", notes, err)
 	}
 	if !r.LegacyArchive() {
@@ -241,7 +242,7 @@ func TestRenamedAccountFolderIsFollowed(t *testing.T) {
 		t.Errorf("account %+v", a)
 	}
 	for _, sel := range []string{"personal", "+1 555 123 4567", "15551234567", alex} {
-		if got, err := r.Select(sel); err != nil || got.JID != alex {
+		if got, err := r.Select(sel, noneLinked); err != nil || got.JID != alex {
 			t.Errorf("%q: %v %v", sel, got, err)
 		}
 	}
@@ -271,19 +272,33 @@ func TestFolderOfAnotherAccountIsNotTaken(t *testing.T) {
 
 func TestSelectNeedsAChoiceWithSeveralAccounts(t *testing.T) {
 	r := &Registry{}
-	if _, err := r.Select(""); !errors.Is(err, ErrNone) {
+	if _, err := r.Select("", noneLinked); !errors.Is(err, ErrNone) {
 		t.Errorf("none: %v", err)
 	}
 	r.Accounts = []Account{{JID: alex, Folder: "Personal"}}
-	if a, err := r.Select(""); err != nil || a.JID != alex {
+	if a, err := r.Select("", noneLinked); err != nil || a.JID != alex {
 		t.Errorf("one: %v %v", a, err)
 	}
-	r.Accounts = append(r.Accounts, Account{JID: sam, Folder: "+15557654321"})
-	_, err := r.Select("")
+	r.Accounts = append(r.Accounts, Account{JID: sam, Folder: "+15557654321", Store: "+15557654321"})
+	r.Accounts[0].Store = "+15551234567"
+	linked := map[string]bool{}
+	isLinked := func(p string) bool { return linked[filepath.Base(filepath.Dir(p))] }
+	if _, err := r.Select("", isLinked); !errors.Is(err, ErrNone) {
+		t.Errorf("both logged out: %v", err)
+	}
+	linked["+15557654321"] = true
+	if a, err := r.Select("", isLinked); err != nil || a.JID != sam {
+		t.Errorf("one still linked: %v %v", a, err)
+	}
+	linked["+15551234567"] = true
+	_, err := r.Select("", isLinked)
 	if err == nil || !strings.Contains(err.Error(), "--account") || !strings.Contains(err.Error(), "Personal (+15551234567), +15557654321") {
 		t.Errorf("several: %v", err)
 	}
-	if _, err := r.Select("Work"); err == nil || !strings.Contains(err.Error(), "Personal (+15551234567)") {
+	if a, err := r.Select("personal", isLinked); err != nil || a.JID != alex {
+		t.Errorf("chosen: %v %v", a, err)
+	}
+	if _, err := r.Select("Work", isLinked); err == nil || !strings.Contains(err.Error(), "Personal (+15551234567)") {
 		t.Errorf("unknown: %v", err)
 	}
 	if all, err := r.Filter(""); err != nil || len(all) != 2 {
@@ -312,14 +327,14 @@ func TestSettleMovesANewLinkIntoItsStoreFolder(t *testing.T) {
 			n++
 			return os.Rename(from, to)
 		}
-		err := r.Settle(alex, unlinked)
+		err := r.Settle(alex, noneLinked)
 		rename = os.Rename
 		if err != nil {
 			r, _ = Load(store, arch)
 			if !r.NeedsMigration(func(string) bool { return false }) {
 				t.Fatal("unsettled link not noticed")
 			}
-			if _, err := r.Migrate(jidOf(""), unlinked); err != nil {
+			if _, err := r.Migrate(jidOf(""), noneLinked); err != nil {
 				t.Fatalf("stop %d: %v", stopAt, err)
 			}
 		}
@@ -344,7 +359,7 @@ func TestSettleKeepsALinkedSession(t *testing.T) {
 	write(t, filepath.Join(store, Pending, "session.db"), "new")
 	r, _ := Load(store, filepath.Join(base, "WhatsApp"))
 	r.Add(alex, Pending)
-	if err := r.Settle(alex, func(string) bool { return false }); err == nil {
+	if err := r.Settle(alex, func(string) bool { return true }); err == nil {
 		t.Error("replaced a linked session")
 	}
 	if tree(t, store)["+15551234567/session.db"] != "linked" {
