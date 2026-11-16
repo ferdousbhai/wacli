@@ -41,16 +41,21 @@ var errBusy = errors.New("another wacli is running (the wacli-sync service? `sys
 // picker chooses the accounts a command opens.
 type picker func(*accounts.Registry) ([]accounts.Account, error)
 
-// one opens the account sel names (which may be "" with one account).
+// one opens the account sel names (which may be "" with one linked).
 func one(sel string) picker {
 	return func(r *accounts.Registry) ([]accounts.Account, error) {
 		a, err := selectAccount(r, sel)
-		return []accounts.Account{a}, err
+		if err != nil {
+			return nil, err
+		}
+		if !openable(r, a) {
+			return nil, fmt.Errorf("%s: %w", a.Label(), errUnlinked)
+		}
+		return []accounts.Account{a}, nil
 	}
 }
 
-// every opens all accounts; a logged-out one only while its folder is kept
-// (opening it would make it again), for an import into it.
+// every opens all accounts that can be opened.
 func every(r *accounts.Registry) ([]accounts.Account, error) {
 	all, err := r.Filter("")
 	if errors.Is(err, accounts.ErrNone) {
@@ -58,11 +63,17 @@ func every(r *accounts.Registry) ([]accounts.Account, error) {
 	}
 	var list []accounts.Account
 	for _, a := range all {
-		if isLinked(r.SessionPath(a)) || archive.Exists(r.ArchiveRoot(a)) {
+		if openable(r, a) {
 			list = append(list, a)
 		}
 	}
-	return list, err
+	return list, nil
+}
+
+// openable: a logged-out account is opened only while its folder is kept
+// (opening it would make it again), for an import into it.
+func openable(r *accounts.Registry, a accounts.Account) bool {
+	return isLinked(r.SessionPath(a)) || archive.Exists(r.ArchiveRoot(a))
 }
 
 // openSession takes the store lock, moves the single-account layout into

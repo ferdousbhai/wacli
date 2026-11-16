@@ -326,6 +326,10 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			if reg.LegacyArchive() {
 				problems = append(problems, "chat folders from before accounts sit directly in "+f.archiveDir+" and belong to no linked account; `wacli auth` moves them into the account it links if it's the only one, else move them into an account's folder yourself")
 			}
+			anyLinked := false
+			for _, o := range accs {
+				anyLinked = anyLinked || isLinked(reg.SessionPath(o.Account))
+			}
 			var rows []map[string]any
 			for _, o := range accs {
 				st := o.st
@@ -349,7 +353,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				if !running && linked && st.Halted == "" && !st.LoggedOut {
 					probs = append(probs, "sync is not running, so the archive isn't being updated (`systemctl --user start wacli-sync`)")
 				}
-				if !linked && !st.LoggedOut {
+				if !linked && !st.LoggedOut && !anyLinked { // with others linked: logged out on purpose
 					probs = append(probs, "not linked: run `wacli auth`, then start the sync")
 				}
 				if o.ok {
@@ -442,6 +446,10 @@ func newLogoutCmd(f *rootFlags) *cobra.Command {
 		Short: "Unlink an account from this computer (its chat folders are kept)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := openSession(f, one(f.account))
+			if errors.Is(err, errUnlinked) {
+				fmt.Fprintln(os.Stderr, "Already unlinked.")
+				return nil
+			}
 			if err != nil {
 				return err
 			}

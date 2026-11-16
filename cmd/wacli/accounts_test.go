@@ -273,11 +273,17 @@ func TestSyncLeavesADeletedLoggedOutAccountAlone(t *testing.T) {
 	if list, err := every(reg); err != nil || len(list) != 0 {
 		t.Errorf("opened %v %v", list, err)
 	}
+	if _, err := one("")(reg); !errors.Is(err, errUnlinked) {
+		t.Errorf("send, logout…: %v", err)
+	}
 	meta := filepath.Join(f.archiveDir, "+15551234567", ".wacli")
 	os.MkdirAll(meta, 0o700)
 	os.WriteFile(filepath.Join(meta, "chats.json"), []byte("{}"), 0o600)
 	if list, err := every(reg); err != nil || len(list) != 1 {
 		t.Errorf("kept folder: %v %v", list, err)
+	}
+	if list, err := one("")(reg); err != nil || len(list) != 1 {
+		t.Errorf("import into the kept folder: %v %v", list, err)
 	}
 }
 

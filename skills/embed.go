@@ -14,4 +14,4 @@ var Wacli []byte
 const Revision = 9
 
 // sha256 of the SKILL.md that Revision describes.
-const revisionHash = "69afb9586f0a478656c8ac3eb6a57d91a86501ba7f2a50419a8a997d5401f141"
+const revisionHash = "57541d552bf1ac39a674c4858cede7032a6ac2e12655a0053bc911d1ffb2c85f"

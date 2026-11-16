@@ -102,6 +102,6 @@ Commands (they go through the running sync; the sent message lands in the archiv
 
 ## Notes
 
-- The WhatsApp sessions (login keys) are `<number>/session.db` in the store directory; never share them.
+- The WhatsApp sessions (login keys) are `+<number>/session.db` in the store directory; never share them.
 - Linking another account is `wacli auth` with the sync stopped; the user scans the QR code themselves.
 - `--json` gives machine-readable output; `wacli <command> --help` documents every flag.
