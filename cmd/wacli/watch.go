@@ -26,9 +26,9 @@ func newWatchCmd(f *rootFlags) *cobra.Command {
 	var chat string
 	cmd := &cobra.Command{
 		Use:   "watch",
-		Short: "Print new messages as JSON lines while `sync --follow` archives them",
+		Short: "Print new messages as JSON lines while `sync --follow` saves them",
 		Long: `Prints one JSON object per line for every new, edited or deleted message
-the running ` + "`wacli sync --follow`" + ` archives, once it is on disk:
+the running ` + "`wacli sync --follow`" + ` saves, once it is on disk:
 
   {"source":"whatsapp","account":"<account folder>","id":"…",
    "thread":"<chat JID>","chat":"<name>","at":<unix ms>,"from":"<sender>",
@@ -55,7 +55,7 @@ and exits non-zero when no sync is running or the sync stops.`,
 			return watch(ctx, f.storeDir, o, os.Stdout)
 		},
 	}
-	cmd.Flags().Int64Var(&o.Since, "since", 0, "first print archived messages sent since this time (unix ms), to catch up")
+	cmd.Flags().Int64Var(&o.Since, "since", 0, "first print saved messages sent since this time (unix ms), to catch up")
 	cmd.Flags().StringVar(&chat, "chat", "", "only this chat (a name, number or JID)")
 	cmd.Flags().BoolVar(&o.IncludeMine, "include-mine", false, "also print messages you sent")
 	addAccountFlag(cmd, f, allAccountUsage)

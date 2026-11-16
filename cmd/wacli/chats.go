@@ -37,7 +37,7 @@ func newChatsCmd(f *rootFlags) *cobra.Command {
 	var query string
 	cmd := &cobra.Command{
 		Use:   "chats",
-		Short: "List archived chats and where their folders are",
+		Short: "List saved chats and where their folders are",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			reg, err := readRegistry(f)
 			if err != nil {
@@ -189,7 +189,7 @@ func newRefetchCmd(f *rootFlags) *cobra.Command {
 	r := request{Op: "refetch"}
 	cmd := &cobra.Command{
 		Use:   "refetch",
-		Short: "Ask the phone again for messages archived as empty lines",
+		Short: "Ask the phone again for messages saved as empty lines",
 		Long: `Finds lines with nothing after the sender's name (in one chat, or all) and
 asks your phone for the history around them again. The phone sends it to wacli
 only; nothing goes to the chat. Lines wacli can show are filled in, and each
@@ -276,7 +276,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Show link status, sync health and where the archive lives",
+		Short: "Show link status, sync health and where the chats are saved",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			reg, err := readRegistry(f)
 			if err != nil {
@@ -316,7 +316,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				}
 			}
 			info := map[string]any{
-				"archive":      f.archiveDir,
+				"dir":          f.archiveDir,
 				"store":        f.storeDir,
 				"sync_running": running,
 			}
@@ -331,13 +331,13 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			for _, o := range accs {
 				anyLinked = anyLinked || o.linked
 			}
-			var rows []map[string]any
+			rows := []map[string]any{}
 			for _, o := range accs {
 				st := o.st
 				row := map[string]any{
 					"account":     o.Folder,
 					"jid":         o.JID,
-					"archive":     o.ar.Root(),
+					"dir":         o.ar.Root(),
 					"chats":       len(o.ar.Chats()),
 					"date_format": o.ar.DateFormat(),
 				}
@@ -352,7 +352,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				row["linked"] = linked
 				var probs []string
 				if !running && linked && st.Halted == "" && !st.LoggedOut {
-					probs = append(probs, "sync is not running, so the archive isn't being updated (`systemctl --user start wacli-sync`)")
+					probs = append(probs, "sync is not running, so new messages aren't being saved (`systemctl --user start wacli-sync`)")
 				}
 				if !linked && !st.LoggedOut && !anyLinked { // with others linked: logged out on purpose
 					probs = append(probs, "not linked: run `wacli auth`, then start the sync")
@@ -360,7 +360,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				if o.ok {
 					row["connected"] = running && st.Connected
 					if !st.LastArchived.IsZero() {
-						row["last_archived"] = st.LastArchived.Format(time.RFC3339)
+						row["last_saved"] = st.LastArchived.Format(time.RFC3339)
 					}
 					row["status_updated"] = st.UpdatedAt.Format(time.RFC3339)
 					row["pending_media"] = st.PendingMedia
@@ -410,14 +410,14 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 				return out.WriteJSON(os.Stdout, info)
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			for _, k := range []string{"archive", "store", "sync_running", "agent_skill"} {
+			for _, k := range []string{"dir", "store", "sync_running", "agent_skill"} {
 				if v, ok := info[k]; ok {
 					fmt.Fprintf(w, "%s\t%v\n", strings.ToUpper(k), v)
 				}
 			}
 			for i, row := range rows {
 				fmt.Fprintf(w, "\nACCOUNT\t%s\n", accs[i].Label())
-				for _, k := range []string{"archive", "linked", "connected", "last_archived", "status_updated", "chats", "chats_history_complete", "pending_media", "empty_lines_to_check", "date_format"} {
+				for _, k := range []string{"dir", "linked", "connected", "last_saved", "status_updated", "chats", "chats_history_complete", "pending_media", "empty_lines_to_check", "date_format"} {
 					if v, ok := row[k]; ok {
 						fmt.Fprintf(w, "  %s\t%v\n", strings.ToUpper(k), v)
 					}

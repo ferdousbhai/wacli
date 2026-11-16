@@ -25,7 +25,7 @@ and `tail -F` them. wacli links to WhatsApp as a companion device (like
 WhatsApp Desktop) using [whatsmeow](https://github.com/tulir/whatsmeow).
 
 Started from [openclaw/wacli](https://github.com/openclaw/wacli) (MIT), which
-stores messages in SQLite. [docs/archive.md](docs/archive.md) describes the
+stores messages in SQLite. [docs/folders.md](docs/folders.md) describes the
 format and how folders stay current; [docs/commands.md](docs/commands.md) every
 command.
 
@@ -46,7 +46,7 @@ Settings):
 
 ```bash
 wacli auth                                  # scan the QR code with your phone
-systemctl --user enable --now wacli-sync    # keep archiving in the background
+systemctl --user enable --now wacli-sync    # keep saving in the background
 loginctl enable-linger "$USER"              # keep it running while you're logged out
 wacli skill install                         # optional: the agent skill (see Coding agents)
 ```
@@ -64,7 +64,7 @@ and Windows but is untested there, and there's no launchd unit yet.
 
 Moving from a `go install` build to the package? The old binary usually comes
 first on `PATH`, and a unit in `~/.config/systemd/user` overrides the packaged
-one, so swap them over (the archive and the link are untouched):
+one, so swap them over (the WhatsApp folder and the link are untouched):
 
 ```bash
 systemctl --user disable wacli-sync   # its enable link points at the old unit
@@ -76,26 +76,26 @@ systemctl --user enable wacli-sync && systemctl --user restart wacli-sync
 Coming from [openclaw/wacli](https://github.com/openclaw/wacli)? This wacli
 uses the same session store, so it starts out linked, but a link made by the
 old one didn't ask for full history: run `wacli logout` and `wacli auth` to
-archive everything. The old `wacli.db` isn't read and can be deleted.
+save everything. The old `wacli.db` isn't read and can be deleted.
 
 ## Use
 
 ```bash
 # First, if your phone doesn't show dates like 2026-10-24, 05:33:36, set
-# WACLI_DATE_FORMAT (see Settings); the archive keeps the one it starts with.
-wacli auth                  # scan the QR code; archives your full history and media
-wacli sync --follow         # keep archiving as messages arrive (run it as a service)
+# WACLI_DATE_FORMAT (see Settings); the folder keeps the one it starts with.
+wacli auth                  # scan the QR code; saves your full history and media
+wacli sync --follow         # keep saving as messages arrive (run it as a service)
 wacli chats                 # where each chat's folder is
 wacli backfill --all        # ask the phone for anything older it still has
 wacli import "WhatsApp Chat - Maya.zip"   # merge a phone export for anything it won't send
 wacli send text --to "+14155551212" --message "Running late"
 wacli send file --to "Maya" --file invoice.pdf --caption "Invoice"
-wacli watch                 # new messages as JSON lines, as the sync archives them
+wacli watch                 # new messages as JSON lines, as the sync saves them
 wacli doctor
 ```
 
 `send`, `backfill`, `refetch` and `import` hand their work to a running `sync --follow`,
-so they work while the service is up and what you send lands in the archive.
+so they work while the service is up and what you send lands in the WhatsApp folder.
 
 `watch` follows that sync too: one JSON object per line for each new, edited or
 deleted message, printed once it is on disk (`ref` is the chat's `_chat.txt`,
@@ -106,7 +106,7 @@ deleted message, printed once it is on disk (`ref` is the chat's `_chat.txt`,
 ### Several accounts
 
 Run `wacli auth` once per WhatsApp account (stop the sync first, and start it
-again after). Each account gets its own folder in the archive, named after its
+again after). Each account gets its own folder in `~/WhatsApp`, named after its
 number, and its own session in the store; one `sync --follow` serves them all.
 Rename an account's folder whenever you like (stop the sync first): wacli
 finds it again by the `.wacli/account` file inside it.
@@ -136,7 +136,7 @@ systemctl --user enable --now wacli-sync   # runs ~/.local/bin/wacli
 loginctl enable-linger "$USER"   # keep it running while you're logged out
 ```
 
-`wacli doctor` shows whether it is connected and archiving.
+`wacli doctor` shows whether it is connected and saving.
 
 ## Coding agents
 
@@ -157,10 +157,10 @@ overwrites a skill it didn't install (`--force` adopts one, keeping a backup).
 
 | Flag | Env | Default |
 |---|---|---|
-| `--archive` | `WACLI_ARCHIVE_DIR` | `~/WhatsApp` |
+| `--dir` | `WACLI_DIR` | `~/WhatsApp` |
 | `--store` (session) | `WACLI_STORE_DIR` | `~/.local/state/wacli` on Linux, `~/.wacli` elsewhere |
 | `--account` | `WACLI_ACCOUNT` | the only account (needed with several, for commands that act on one) |
-| `--date-format` | `WACLI_DATE_FORMAT` | `2006-01-02, 15:04:05` (Go layout; match your phone's region; set it for the first `auth`, the archive then keeps it) |
+| `--date-format` | `WACLI_DATE_FORMAT` | `2006-01-02, 15:04:05` (Go layout; match your phone's region; set it for the first `auth`, the folder then keeps it) |
 
 Times are written in the computer's time zone, as the phone writes them in its own.
 
@@ -169,7 +169,7 @@ Times are written in the computer's time zone, as the phone writes them in its o
 - WhatsApp decides how much history a linked device gets. `auth` asks for the
   full history; `backfill` asks for more page by page; what the phone won't
   send, `import` merges from a manual export.
-- Like a real export, the archive has no reactions, quoted replies or read
+- Like a real export, the folders have no reactions, quoted replies or read
   receipts, and edits keep only the latest text.
 - WhatsApp Web is not a public API. Use at your own risk.
 

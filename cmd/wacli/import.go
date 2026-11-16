@@ -22,9 +22,9 @@ func newImportCmd(f *rootFlags) *cobra.Command {
 	var chat string
 	cmd := &cobra.Command{
 		Use:   "import <export.zip|folder>",
-		Short: "Merge a chat exported from your phone into the archive",
+		Short: "Merge a chat exported from your phone into its chat folder",
 		Long: `Merges an iPhone "Export chat" (zip or unzipped folder) into the matching
-chat folder: messages already archived are matched by sender and time, missing
+chat folder: messages already saved are matched by sender and time, missing
 ones are added, and attachments fill in entries that say "… omitted". Use it
 for history the phone won't send to linked devices. Importing twice is safe.
 
@@ -78,7 +78,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request, lidOf func(ty
 	}
 	c, err := ar.Chat(jid.String())
 	if err != nil {
-		return nil, fmt.Errorf("%s isn't archived, so there is no chat to merge the export into: %w", jid, err)
+		return nil, fmt.Errorf("%s has no chat folder yet, so there is no chat to merge the export into: %w", jid, err)
 	}
 	entries, err := ar.ReadExport(dir)
 	if err != nil {
@@ -88,7 +88,7 @@ func doImport(ctx context.Context, ar *archive.Archive, r request, lidOf func(ty
 	if err != nil {
 		return nil, err
 	}
-	msg := fmt.Sprintf("%s: %d already archived, %d added, %d attachments restored",
+	msg := fmt.Sprintf("%s: %d already saved, %d added, %d attachments restored",
 		filepath.Base(c.Dir()), res.Matched, res.Added, res.MediaRestored)
 	if res.Skipped > 0 {
 		msg += fmt.Sprintf(", %d skipped (dated in the future)", res.Skipped)

@@ -304,7 +304,7 @@ func runUntilIdle(ctx context.Context, live []*account, idle time.Duration) ([]*
 			pending += a.arc.PendingMedia()
 		}
 		if i%10 == 0 && n != last {
-			fmt.Fprintf(os.Stderr, "\rarchived %d messages, %d attachments pending   ", n, pending)
+			fmt.Fprintf(os.Stderr, "\rsaved %d messages, %d attachments pending   ", n, pending)
 			last = n
 		}
 		if quiet() {
@@ -344,7 +344,7 @@ func dropEnded(live []*account) ([]*account, error) {
 func (a *account) summary() map[string]any {
 	return map[string]any{
 		"account":       a.Folder,
-		"archive":       a.ar.Root(),
+		"dir":           a.ar.Root(),
 		"chats":         len(a.ar.Chats()),
 		"new_messages":  a.arc.Added(),
 		"pending_media": a.arc.PendingMedia(),

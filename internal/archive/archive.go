@@ -30,7 +30,7 @@ const (
 )
 
 // ErrReadOnly is returned by writes on an archive opened ReadOnly.
-var ErrReadOnly = errors.New("archive opened read-only")
+var ErrReadOnly = errors.New("the WhatsApp folder is opened read-only")
 
 type Options struct {
 	Root       string
@@ -161,7 +161,7 @@ func (a *Archive) settleDateFormat(chosen string) error {
 	hasLines := len(firsts) > 0
 	if stored != "" && hasLines {
 		a.opts.DateFormat = stored
-		a.opts.Logf("note: using this archive's --date-format %q, not %q: its lines are written in it", stored, chosen)
+		a.opts.Logf("note: using --date-format %q, not %q: the chats here are written in it", stored, chosen)
 		return nil
 	}
 	// Nothing recorded yet, or no lines to keep consistent: chosen decides.

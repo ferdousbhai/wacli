@@ -5,7 +5,7 @@
 - `internal/archive/`: the data. Chat folders shaped like iPhone exports (`_chat.txt` + media), the iOS line format (render/parse), per-chat ID index, holds/flushes, repair, import merge. No whatsmeow dependency.
 - `internal/archiver/`: whatsmeow events → archive entries: history sync, live messages, edits/deletes, system lines, names and mentions, media download/retry queue, backfill paging, name refresh, status.json.
 - `internal/wa/`: whatsmeow client wrapper and message parsing (only what the archiver and send use).
-- `skills/wacli/SKILL.md`: the agent skill, embedded in the binary (`skills/embed.go`) and installed by `wacli skill install`. Update it whenever commands or the archive format change.
+- `skills/wacli/SKILL.md`: the agent skill, embedded in the binary (`skills/embed.go`) and installed by `wacli skill install`. Update it whenever commands or the folder format change.
 - `packaging/aur/wacli/PKGBUILD`: the Arch package (`/usr/bin/wacli`, the `wacli-sync` user unit made from `contrib/systemd/` with `ExecStart=/usr/bin/wacli`; never enabled by the package). `packaging/repo/`: the signed-repo `install.sh` (its `add_signed_repo` is shared byte-for-byte with the owner's other products and hash-pinned in `add_signed_repo.sha256`) and its tests.
 - `bin/build-package <arch>`: native, unsigned package build from committed HEAD; `bin/arch-run` wraps it in a disposable Arch chroot (CI, `.github/workflows/packages.yml`); `bin/release <version>`: maintainer-only signing and publishing; `bin/verify-release` (also `.github/workflows/verify-release.yml`).
 - `internal/accounts/`: the linked accounts (`<store>/accounts.json`), finding renamed account folders, `--account` selection, migrating the single-account layout, settling a new link's session. No whatsmeow dependency.
@@ -13,12 +13,12 @@
 
 ## Key Architectural Facts
 - **The folders are the data.** `~/WhatsApp/<account>/WhatsApp Chat - <name>/_chat.txt` must stay byte-compatible with an iPhone export; `internal/archive/testdata` and `WACLI_REFERENCE_EXPORT` (a real export, never committed) check that. Never add markers or IDs to `_chat.txt`.
-- **Accounts**: each linked WhatsApp account is a complete archive of its own in `<archive>/<account>/` (its number, `+15551234567`, until the owner renames it; `.wacli/account` holds its JID so a rename is found) with a session in `<store>/<number>/session.db`; `<store>/accounts.json` maps them (`internal/accounts`). One `sync --follow` serves all accounts over one socket. The single-account layout is migrated by renames recorded first, resumable (`internal/accounts/migrate.go`).
-- **Bookkeeping lives in `<archive>/<account>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `refetched.json`, `date-format` (the layout its lines use; it wins over the flag), `status.json`. `session.db` (whatsmeow, one per account) is the only database.
+- **Accounts**: each linked WhatsApp account is complete on its own in `<dir>/<account>/` (its number, `+15551234567`, until the owner renames it; `.wacli/account` holds its JID so a rename is found) with a session in `<store>/<number>/session.db`; `<store>/accounts.json` maps them (`internal/accounts`). One `sync --follow` serves all accounts over one socket. The single-account layout is migrated by renames recorded first, resumable (`internal/accounts/migrate.go`).
+- **Bookkeeping lives in `<dir>/<account>/.wacli/`**: `chats.json`, `index/<jid>.tsv` (row i ↔ entry i), `pending-media.json`, `refetched.json`, `date-format` (the layout its lines use; it wins over the flag), `status.json`. `session.db` (whatsmeow, one per account) is the only database.
 - **Writes**: in-memory entries are authoritative. Newest message = two appends; anything else, or any failure, rewrites both files from memory (temp file + rename). History chunks `Hold` the chats they touch; other writers `Flush` before acknowledging.
 - **Times** use the computer's time zone at write time. Don't pin a zone.
 - **Backfill** follows the phone's page order (last message of each page), not timestamps.
-- Spec: `docs/archive.md`; commands: `docs/commands.md`.
+- Spec: `docs/folders.md`; commands: `docs/commands.md`.
 
 ## Build, Test, and Development Commands
 - `make build` → `dist/wacli`; `make install` → `~/.local/bin/wacli` (then `systemctl --user restart wacli-sync`).

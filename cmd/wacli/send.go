@@ -20,7 +20,7 @@ import (
 )
 
 func newSendCmd(f *rootFlags) *cobra.Command {
-	cmd := &cobra.Command{Use: "send", Short: "Send a message; it is archived like any other"}
+	cmd := &cobra.Command{Use: "send", Short: "Send a message; it is saved like any other"}
 	addAccountFlag(cmd, f, "the WhatsApp account to send from, needed when several are linked")
 
 	var to, message string

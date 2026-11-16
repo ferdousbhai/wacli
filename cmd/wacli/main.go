@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const version = "0.27.0"
+const version = "0.27.1"
 
 type rootFlags struct {
 	storeDir   string
@@ -96,8 +96,11 @@ Read the folders with any tool: cat, grep -r, tail -f, an editor.`,
 		},
 	}
 	root.PersistentFlags().StringVar(&f.storeDir, "store", config.DefaultStoreDir(), "directory holding the WhatsApp sessions (one folder per account)")
-	root.PersistentFlags().StringVar(&f.archiveDir, "archive", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()), "directory holding the account folders, each with its chat folders")
-	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", os.Getenv("WACLI_DATE_FORMAT"), "Go time layout for entry timestamps, matching your phone's region; an archive keeps the one it was started with (default "+strconv.Quote(archive.DefaultDateFormat)+")")
+	dir := envOr("WACLI_DIR", envOr("WACLI_ARCHIVE_DIR", defaultArchiveDir()))
+	root.PersistentFlags().StringVar(&f.archiveDir, "dir", dir, "the WhatsApp folder: one folder per account, each with its chat folders (env WACLI_DIR)")
+	root.PersistentFlags().StringVar(&f.archiveDir, "archive", dir, "old name of --dir")
+	_ = root.PersistentFlags().MarkHidden("archive")
+	root.PersistentFlags().StringVar(&f.dateFormat, "date-format", os.Getenv("WACLI_DATE_FORMAT"), "Go time layout for entry timestamps, matching your phone's region; a WhatsApp folder keeps the one it was started with (default "+strconv.Quote(archive.DefaultDateFormat)+")")
 	root.PersistentFlags().BoolVar(&f.asJSON, "json", false, "print machine-readable JSON")
 
 	root.AddCommand(

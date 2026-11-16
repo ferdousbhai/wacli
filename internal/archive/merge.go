@@ -223,7 +223,7 @@ func (a *Archive) ReadExport(dir string) ([]Entry, error) {
 	for _, raw := range SplitEntries(string(data)) {
 		e, err := Parse(raw, a.opts.DateFormat, a.opts.Location)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w (this archive's lines use --date-format %q; an export written in another format can't be merged)", ChatFile, err, a.opts.DateFormat)
+			return nil, fmt.Errorf("%s: %w (the chats here use --date-format %q; an export written in another format can't be merged)", ChatFile, err, a.opts.DateFormat)
 		}
 		out = append(out, e)
 	}

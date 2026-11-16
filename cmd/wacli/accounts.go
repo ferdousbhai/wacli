@@ -27,7 +27,7 @@ const (
 	allAccountUsage = "only this WhatsApp account (default: all)"
 )
 
-var errOldSync = errors.New("the archive still has the layout from before accounts, and another wacli (an older `sync --follow`?) holds the store, so it can't be moved now; restart the sync with this wacli (systemctl --user restart wacli-sync) and it moves it")
+var errOldSync = errors.New("the WhatsApp folder still has the layout from before accounts, and another wacli (an older `sync --follow`?) holds the store, so it can't be moved now; restart the sync with this wacli (systemctl --user restart wacli-sync) and it moves it")
 
 // readRegistry loads the accounts for a command that only reads. If the
 // old layout is still to be moved it takes the store lock to do so, unless a

@@ -25,9 +25,9 @@ func newAuthCmd(f *rootFlags) *cobra.Command {
 	var idle time.Duration
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Link a WhatsApp account to this computer and archive its full history",
+		Short: "Link a WhatsApp account to this computer and save its full history",
 		Long: `Shows a QR code to scan in WhatsApp → Linked devices (or prints a pairing
-code with --phone), asks the phone for its full history, and archives it with
+code with --phone), asks the phone for its full history, and saves it with
 all media into a folder named after the account's number. Accounts linked
 before keep working: run it once per account. Linking an account that was
 logged out again picks up its folder.
@@ -94,7 +94,7 @@ func runAuth(ctx context.Context, f *rootFlags, phone string, idle time.Duration
 	if acct == nil {
 		return errors.New("WhatsApp didn't confirm the link; run `wacli auth` again")
 	}
-	fmt.Fprintf(os.Stderr, "Linked %s. Archiving history into %s (keep the phone online)…\n", accounts.Key(acct.JID), acct.ar.Root())
+	fmt.Fprintf(os.Stderr, "Linked %s. Saving history into %s (keep the phone online)…\n", accounts.Key(acct.JID), acct.ar.Root())
 	if _, err := runUntilIdle(ctx, []*account{acct}, idle); err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 	var idle time.Duration
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Archive new messages of every linked account (keep running with --follow)",
+		Short: "Save new messages of every linked account (keep running with --follow)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := openSession(f, every)
 			if err != nil {
@@ -237,12 +237,12 @@ func newSyncCmd(f *rootFlags) *cobra.Command {
 			defer stop()
 			for _, a := range live {
 				a.arc.RefetchInBackground()
-				fmt.Fprintf(os.Stderr, "Archiving %s into %s; Ctrl+C to stop.\n", accounts.Key(a.JID), a.ar.Root())
+				fmt.Fprintf(os.Stderr, "Saving %s into %s; Ctrl+C to stop.\n", accounts.Key(a.JID), a.ar.Root())
 			}
 			return runFollowing(ctx, live)
 		},
 	}
-	cmd.Flags().BoolVar(&follow, "follow", false, "keep running and archive messages as they arrive")
+	cmd.Flags().BoolVar(&follow, "follow", false, "keep running and save messages as they arrive")
 	cmd.Flags().DurationVar(&idle, "idle-exit", 30*time.Second, "without --follow, finish after this long without new messages")
 	return cmd
 }
@@ -279,8 +279,8 @@ func report(f *rootFlags, data ...map[string]any) error {
 		return out.WriteJSON(os.Stdout, data)
 	}
 	for _, d := range data {
-		fmt.Printf("Account: %v\nArchive: %v\nChats: %v\nNew messages: %v\nAttachments still pending: %v\n",
-			d["account"], d["archive"], d["chats"], d["new_messages"], d["pending_media"])
+		fmt.Printf("Account: %v\nFolder: %v\nChats: %v\nNew messages: %v\nAttachments still pending: %v\n",
+			d["account"], d["dir"], d["chats"], d["new_messages"], d["pending_media"])
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
 # Commands
 
-Global flags: `--archive` (`WACLI_ARCHIVE_DIR`, default `~/WhatsApp`, holding
-a folder per account), `--store` (`WACLI_STORE_DIR`, the sessions), `--date-format` (`WACLI_DATE_FORMAT`, a Go
+Global flags: `--dir` (`WACLI_DIR`, default `~/WhatsApp`, holding
+a folder per account; old name `--archive`), `--store` (`WACLI_STORE_DIR`, the sessions), `--date-format` (`WACLI_DATE_FORMAT`, a Go
 time layout matching your phone's region; set it before the first `auth`: the
-archive records the format its lines are written in and keeps using it, whatever
+folder records the format its lines are written in and keeps using it, whatever
 a later command or the service is given), `--json`.
 
 One process owns the WhatsApp sessions at a time. While `sync --follow` runs,
@@ -12,7 +12,7 @@ One process owns the WhatsApp sessions at a time. While `sync --follow` runs,
 
 ## Accounts
 
-Every linked WhatsApp account has a folder in the archive (named after its
+Every linked WhatsApp account has a folder in the WhatsApp folder (named after its
 number, `+15551234567`, until you rename it) and a session in the store.
 `--account <number|folder name>` (env `WACLI_ACCOUNT`) chooses one; numbers
 match in any spelling (`+1 555 123 4567`, `15551234567`, the JID), folder
@@ -24,7 +24,7 @@ one. `sync` always serves every linked account.
 
 Rename an account's folder by hand, with the sync stopped: wacli finds it by
 its `.wacli/account` file and records the new name (see
-[archive.md](archive.md#accounts)). The first command after upgrading from a
+[folders.md](folders.md#accounts)). The first command after upgrading from a
 version without accounts moves the chat folders and session into the account
 folder by itself.
 
@@ -35,8 +35,8 @@ wacli auth [--phone +NUMBER] [--history-days N] [--idle-exit 3m]
 ```
 
 Links a WhatsApp account to this computer as a companion device (QR code, or
-a pairing code with `--phone`) and archives what the phone sends, with media,
-into the account's folder (`<archive>/+<number>/`, made once the phone has
+a pairing code with `--phone`) and saves what the phone sends, with media,
+into the account's folder (`<dir>/+<number>/`, made once the phone has
 paired). Accounts linked before keep working; run it once per account. It
 needs the store to itself: stop a running sync first (`systemctl --user stop
 wacli-sync`) and start it again afterwards, so it serves the new account too.
@@ -56,7 +56,7 @@ after the last batch.
 wacli sync [--follow] [--idle-exit 30s]
 ```
 
-Archives everything WhatsApp delivers to every linked account: new messages,
+Saves everything WhatsApp delivers to every linked account: new messages,
 the backlog queued while wacli was offline, edits, deletes, group changes, and
 downloads media. Without `--follow` it stops once all are idle (`--json`
 prints one summary, or a list with several accounts). With `--follow` it runs
@@ -98,11 +98,11 @@ to the chat). Lines wacli can show are filled in, and every message's type is
 reported, e.g. `album`, `deleted`, `not on phone`, or the WhatsApp field name of
 a type wacli can't show yet. Types are remembered in `.wacli/refetched.json`, so
 a line is asked about once; `--again` asks about all of them. Album headers stay
-empty: iPhone exports show them that way. Messages missing from the archive
+empty: iPhone exports show them that way. Messages missing from the folder
 that come along are added, as with `backfill`.
 
 You rarely need to run it. New empty lines don't need the phone: their type is
-known when they're archived, so it's logged (unless it's an album) and
+known when they're saved, so it's logged (unless it's an album) and
 recorded. For lines left from before, a running `sync --follow` asks by itself,
 five requests at a time, whenever WhatsApp is in use on the phone (a message
 sent or a chat read there): WhatsApp answers only while it's open, so nobody has
@@ -116,13 +116,13 @@ many lines are left.
 wacli import "WhatsApp Chat - Maya.zip" [--chat <name|number|JID>] [--account A]
 ```
 
-Merges an iPhone export (zip or folder) into the archived chat. Entries already
+Merges an iPhone export (zip or folder) into the saved chat. Entries already
 there are matched by sender, time (within 2 seconds) and content; missing ones
 are added; attachments fill in entries that say `… omitted`. Importing the same
 export again changes nothing. The chat is found from the export's name; pass
-`--chat` when two chats share it. The export is read in the archive's date
+`--chat` when two chats share it. The export is read in the folder's date
 format, so it must come from a phone in the same region settings (while `sync
---follow` runs, the import is done by it, with its `--archive`). Times are matched in the computer's time zone, as the export
+--follow` runs, the import is done by it, with its `--dir`). Times are matched in the computer's time zone, as the export
 wrote them in the phone's: if the two differ, stop the sync and run the import
 with `TZ` set to the phone's zone (e.g. `TZ=Asia/Makassar wacli import …`), or
 every line is added again.
@@ -144,9 +144,9 @@ wacli send file [--account A] --to <recipient> --file path [--caption "text"]
 ```
 
 
-`--to` takes a phone number (`+14155551212`), a JID, or an archived chat's
+`--to` takes a phone number (`+14155551212`), a JID, or a saved chat's
 name. Images, videos and audio are sent as such, anything else as a document.
-What you send is archived like anything received. `--message-escapes`
+What you send is saved like anything received. `--message-escapes`
 interprets `\n`, `\r` and `\t`.
 
 ## watch
@@ -156,13 +156,13 @@ wacli watch [--since <unix ms>] [--chat <name|number|JID>] [--account A] [--incl
 ```
 
 Prints one JSON object per line for each new, edited or deleted message that
-the running `sync --follow` archives, after it is written, until stopped:
+the running `sync --follow` saves, after it is written, until stopped:
 
 ```json
 {"source":"whatsapp","account":"Personal","id":"3EB0C1…","thread":"6281111111111@s.whatsapp.net","chat":"Dana Putri","at":1761280773000,"from":"Dana Putri","from_me":false,"kind":"text","text":"Thanks","media":"","ref":"/home/you/WhatsApp/Personal/WhatsApp Chat - Dana Putri/_chat.txt"}
 ```
 
-- `account`: the folder of the account it was archived in (its number, or
+- `account`: the folder of the account it was saved in (its number, or
   the name you renamed it to). Every account is watched unless `--account`.
 
 - `id`: the message ID; an edit is `<id>:edit-<ms>` and a delete
@@ -180,7 +180,7 @@ the running `sync --follow` archives, after it is written, until stopped:
 - `ref`: the chat's `_chat.txt`, which already holds the line.
 
 Only messages that arrive live are printed, not history the phone sends
-(`auth`, `backfill`). `--since` first prints archived messages sent since
+(`auth`, `backfill`). `--since` first prints saved messages sent since
 then (whole seconds, so the boundary second is included), oldest first and as
 they are now: deleted ones are left out and an edited one comes once, with its
 current text. Your own messages are left out unless `--include-mine`;
@@ -198,10 +198,10 @@ names the `--since` to run again with to catch up.
 wacli doctor [--check] [--account A] [--json]
 ```
 
-Shows where the archive and sessions live and, for each account (`--json`:
+Shows where the WhatsApp folder and sessions live and, for each account (`--json`:
 under `accounts`, with its own `problems`), whether it is linked,
 whether sync is running and connected (from `.wacli/status.json`, which sync
-updates every 30 seconds), when it last archived something, how many chats
+updates every 30 seconds), when it last saved something, how many chats
 have complete history and how many attachments are pending, then any problems:
 unlinked, sync not running, silent or disconnected, sync stopped by WhatsApp (and why),
 chats whose files had to be repaired.

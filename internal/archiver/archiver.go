@@ -497,7 +497,7 @@ func (a *Archiver) archiveMessage(ctx context.Context, b *batch, pm wa.ParsedMes
 			a.checked.note(c.JID(), pm.ID, kind)
 		}
 		if !pm.IsAlbum { // albums are empty lines in exports too
-			a.logf("note: %s in %s archived as an empty line: %s", pm.ID, c.Name(), kind)
+			a.logf("note: %s in %s saved as an empty line: %s", pm.ID, c.Name(), kind)
 		}
 	}
 	if inserted {
@@ -566,7 +566,7 @@ func (a *Archiver) wrote(b *batch, c *archive.Chat, err error) bool {
 		a.media.flush() // its download, if any, is queued on disk too
 	}
 	if err != nil {
-		a.logf("warning: archive write failed: %v", err)
+		a.logf("warning: writing the chat folder failed: %v", err)
 		return false
 	}
 	a.touch()
@@ -812,7 +812,7 @@ func (a *Archiver) RecordSent(ctx context.Context, to types.JID, id types.Messag
 	a.archiveMessage(ctx, nil, wa.ParseLiveMessage(evt), "")
 	if data != nil {
 		if err := a.media.placeOwn(chat, string(id), data); err != nil {
-			a.logf("warning: archiving the sent file (it will be downloaded instead): %v", err)
+			a.logf("warning: saving the sent file (it will be downloaded instead): %v", err)
 		}
 	}
 }
