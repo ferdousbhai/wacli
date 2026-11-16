@@ -11,6 +11,7 @@ import (
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/lock"
 	"github.com/ferdousbhai/wacli/internal/sqliteutil"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/cobra"
 
 	"go.mau.fi/whatsmeow/types"

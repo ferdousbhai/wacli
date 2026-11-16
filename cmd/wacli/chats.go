@@ -13,8 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"github.com/ferdousbhai/wacli/internal/accounts"
 	"github.com/ferdousbhai/wacli/internal/archive"
 	"github.com/ferdousbhai/wacli/internal/archiver"

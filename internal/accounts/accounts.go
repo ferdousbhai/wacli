@@ -189,9 +189,10 @@ func readID(root string) string {
 	return strings.TrimSpace(string(data))
 }
 
-// Locate finds each account's folder: the registered one if it's the
-// account's (its .wacli/account names it, or names nobody yet), else the
-// folder in the archive whose .wacli/account names it (renamed by hand).
+// Locate finds each account's folder: the registered one if its
+// .wacli/account names the account (or names nobody, and no other folder
+// claims it), else the folder whose .wacli/account names it (renamed by
+// hand).
 // A registered folder another account claims is given up for a new one.
 // It returns what changed, for the caller to log, and saves when save.
 func (r *Registry) Locate(save bool) ([]string, error) {
@@ -232,10 +233,7 @@ func (r *Registry) claims() map[string]string {
 	if err != nil {
 		return out
 	}
-	for _, e := range entries { // sorted by name
-		if !e.IsDir() {
-			continue
-		}
+	for _, e := range entries { // sorted by name; a symlink to a folder counts
 		if id := readID(filepath.Join(r.ArchiveDir, e.Name())); id != "" {
 			if _, ok := out[id]; !ok {
 				out[id] = e.Name()

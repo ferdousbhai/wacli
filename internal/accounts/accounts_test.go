@@ -270,6 +270,24 @@ func TestFolderOfAnotherAccountIsNotTaken(t *testing.T) {
 	}
 }
 
+// An account folder moved elsewhere and linked back under a new name.
+func TestRenamedFolderBehindASymlinkIsFollowed(t *testing.T) {
+	base := t.TempDir()
+	arch, elsewhere := filepath.Join(base, "WhatsApp"), filepath.Join(base, "big", "Personal")
+	r, _ := Load(filepath.Join(base, "store"), arch)
+	r.Add(alex, "+15551234567")
+	if err := Claim(elsewhere, alex); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(arch, 0o700)
+	if err := os.Symlink(elsewhere, filepath.Join(arch, "Personal")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := r.Locate(false); err != nil || r.Accounts[0].Folder != "Personal" {
+		t.Errorf("got %q %v", r.Accounts[0].Folder, err)
+	}
+}
+
 // A store set up again (a new computer, the archive copied over) links an
 // account into the folder that is already its, renamed or not.
 func TestNewLinkFindsItsKeptFolder(t *testing.T) {
