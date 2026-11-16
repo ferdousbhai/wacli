@@ -288,9 +288,10 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			type opened struct {
 				accounts.Account
-				ar *archive.Archive
-				st archiver.Status
-				ok bool // st was read
+				ar     *archive.Archive
+				st     archiver.Status
+				ok     bool // st was read
+				linked bool
 			}
 			var accs []opened
 			for _, a := range list {
@@ -299,7 +300,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 					return fmt.Errorf("%s: %w", a.Label(), err)
 				}
 				st, err := archiver.ReadStatus(ar.Root())
-				accs = append(accs, opened{a, ar, st, err == nil})
+				accs = append(accs, opened{a, ar, st, err == nil, isLinked(reg.SessionPath(a))})
 			}
 			running, _, _ := lock.Probe(f.storeDir)
 			if !running {
@@ -328,7 +329,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 			}
 			anyLinked := false
 			for _, o := range accs {
-				anyLinked = anyLinked || isLinked(reg.SessionPath(o.Account))
+				anyLinked = anyLinked || o.linked
 			}
 			var rows []map[string]any
 			for _, o := range accs {
@@ -347,7 +348,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 					}
 				}
 				row["chats_history_complete"] = complete
-				linked := isLinked(reg.SessionPath(o.Account))
+				linked := o.linked
 				row["linked"] = linked
 				var probs []string
 				if !running && linked && st.Halted == "" && !st.LoggedOut {
