@@ -117,7 +117,7 @@ wacli send text --account Personal --to Maya --message "On my way"   # or --acco
 wacli chats --account Personal                                        # chats, doctor and watch show every account without it
 ```
 
-With one account `--account` is never needed. With several, `send`,
+With one linked account `--account` is never needed. With several, `send`,
 `backfill`, `refetch`, `import` and `logout` ask for it (or `WACLI_ACCOUNT`)
 and list the accounts. Upgrading from a version without accounts moves the
 chat folders and the session into the account's folder by itself, the first

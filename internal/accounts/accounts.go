@@ -271,7 +271,7 @@ func (r *Registry) Filter(sel string) ([]Account, error) {
 			return []Account{a}, nil
 		}
 	}
-	return nil, fmt.Errorf("no account %q; the accounts are %s", sel, r.list())
+	return nil, fmt.Errorf("no account %q; the accounts are %s", sel, labels(r.Accounts))
 }
 
 // Select returns the one account sel names. sel may be empty when one
@@ -299,8 +299,6 @@ func (r *Registry) Select(sel string, linked func(path string) bool) (Account, e
 	}
 	return Account{}, fmt.Errorf("%d WhatsApp accounts are linked; choose one with --account (or WACLI_ACCOUNT): %s", len(live), labels(live))
 }
-
-func (r *Registry) list() string { return labels(r.Accounts) }
 
 func labels(list []Account) string {
 	var names []string

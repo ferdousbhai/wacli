@@ -215,6 +215,33 @@ func TestLinkingAnAccountTwiceIsRefused(t *testing.T) {
 	}
 }
 
+// A registered account whose store was deleted links again.
+func TestRelinkAfterTheStoreFolderWasDeleted(t *testing.T) {
+	f := testFlags(t)
+	reg, _ := accounts.Load(f.storeDir, f.archiveDir)
+	reg.Add("15551234567@s.whatsapp.net", "+15551234567")
+	reg.Save()
+	s, err := openSession(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(f.storeDir, accounts.Pending, accounts.SessionFile)
+	os.MkdirAll(filepath.Dir(pending), 0o700)
+	client, err := wa.New(wa.Options{StorePath: pending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &linking{ctx: context.Background(), s: s, client: client}
+	l.handle(&events.PairSuccess{ID: types.NewADJID("15551234567", 0, 9)})
+	if acct, err := l.result(); acct == nil || err != nil {
+		t.Errorf("%v %v", acct, err)
+	}
+	s.close()
+	if _, err := os.Stat(filepath.Join(f.storeDir, "+15551234567", accounts.SessionFile)); err != nil {
+		t.Errorf("not settled: %v", err)
+	}
+}
+
 // An old session that can't be read might still be linked: a relink over it
 // is refused, not left unable to settle.
 func TestRelinkOverAnUnreadableSessionIsRefused(t *testing.T) {

@@ -42,7 +42,7 @@ func (r *Registry) Migrate(jidOf func(path string) (string, error), linked func(
 		}
 		if jid != "" {
 			if _, dup := r.Find(jid); dup {
-				return nil, fmt.Errorf("%s and %s both hold a session for %s; remove the one you don't use", p, filepath.Join(r.StoreDir, Key(jid)), Key(jid))
+				return nil, fmt.Errorf("%s holds a second session for %s, which is set up in %s already; remove %s (and its -wal/-shm files), it isn't used", p, Key(jid), filepath.Join(r.StoreDir, Key(jid)), p)
 			}
 			a := r.Add(jid, Key(jid))
 			a.LegacyStore = true

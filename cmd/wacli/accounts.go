@@ -140,6 +140,9 @@ func isLinked(path string) bool {
 // can't be read counts as linked, so it is never replaced. Only under the
 // store lock, with the store closed.
 func mayBeLinked(path string) bool {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return false // and opening it would make it
+	}
 	jid, err := sessionJID(path)
 	return err != nil || jid != ""
 }
