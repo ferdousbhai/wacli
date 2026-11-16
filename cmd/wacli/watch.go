@@ -178,7 +178,7 @@ type watchSource interface {
 	MessagesSince(since int64) []archiver.Message
 }
 
-// watchSource is the accounts sel names (all for "") as one source.
+// watchSource returns the accounts sel names (all for "") as one source.
 func (s *session) watchSource(sel string) (watchSource, error) {
 	list, err := s.reg.Filter(sel)
 	if err != nil {

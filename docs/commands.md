@@ -46,7 +46,7 @@ ran, `wacli logout --account A` first); one that was logged out picks up its
 old folder. It asks for
 a **full** history sync, as WhatsApp Desktop does. That request is part of
 the linking handshake, so it only applies to a new link: run `wacli logout`
-first to relink. History arrives in batches over several minutes; keep the phone
+(`--account A` with several) first to relink. History arrives in batches over several minutes; keep the phone
 online. `--history-days` limits how far back; `--idle-exit` is how long to wait
 after the last batch.
 

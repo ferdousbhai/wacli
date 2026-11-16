@@ -270,6 +270,20 @@ func TestFolderOfAnotherAccountIsNotTaken(t *testing.T) {
 	}
 }
 
+// A store set up again (a new computer, the archive copied over) links an
+// account into the folder that is already its, renamed or not.
+func TestNewLinkFindsItsKeptFolder(t *testing.T) {
+	base := t.TempDir()
+	arch := filepath.Join(base, "WhatsApp")
+	if err := Claim(filepath.Join(arch, "Personal"), alex); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Load(filepath.Join(base, "store"), arch)
+	if a := r.Add(alex, Pending); a.Folder != "Personal" {
+		t.Errorf("got %q", a.Folder)
+	}
+}
+
 func TestSelectNeedsAChoiceWithSeveralAccounts(t *testing.T) {
 	r := &Registry{}
 	if _, err := r.Select("", noneLinked); !errors.Is(err, ErrNone) {

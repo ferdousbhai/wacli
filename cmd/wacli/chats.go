@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/ferdousbhai/wacli/internal/sqliteutil"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/ferdousbhai/wacli/internal/accounts"
@@ -438,21 +436,6 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&check, "check", false, "also read every chat and verify its files (changes nothing)")
 	addAccountFlag(cmd, f, allAccountUsage)
 	return cmd
-}
-
-// isLinked reads the session store without changing it: opening it through
-// whatsmeow would create or migrate it, and doctor must only look.
-func isLinked(path string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	db, err := sql.Open("sqlite3", sqliteutil.FileURI(path, "mode=ro"))
-	if err != nil {
-		return false
-	}
-	defer db.Close()
-	var n int
-	return db.QueryRow("SELECT COUNT(*) FROM whatsmeow_device").Scan(&n) == nil && n > 0
 }
 
 func newLogoutCmd(f *rootFlags) *cobra.Command {

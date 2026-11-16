@@ -125,10 +125,15 @@ func (r *Registry) SessionPath(a Account) string {
 	return filepath.Join(r.StoreDir, a.Store, SessionFile)
 }
 
-// Add registers a newly linked account, with a free archive folder named
-// after its number, pairing in store folder store.
+// Add registers a newly linked account, pairing in store folder store. Its
+// archive folder is the one claiming it (an archive kept from before, maybe
+// renamed), else a free one named after its number.
 func (r *Registry) Add(jid, store string) *Account {
-	r.Accounts = append(r.Accounts, Account{JID: jid, Folder: r.freeFolder(jid), Store: store})
+	folder, ok := r.claims()[jid]
+	if !ok || r.taken(folder, jid) {
+		folder = r.freeFolder(jid)
+	}
+	r.Accounts = append(r.Accounts, Account{JID: jid, Folder: folder, Store: store})
 	sort.SliceStable(r.Accounts, func(i, j int) bool { return r.Accounts[i].JID < r.Accounts[j].JID })
 	a, _ := r.Find(jid)
 	return a
@@ -143,17 +148,21 @@ func (r *Registry) freeFolder(jid string) string {
 		if n > 1 {
 			name = fmt.Sprintf("%s (%d)", base, n)
 		}
-		taken := false
-		for _, a := range r.Accounts {
-			if a.JID != jid && strings.EqualFold(a.Folder, name) {
-				taken = true
-			}
-		}
 		path := filepath.Join(r.ArchiveDir, name)
-		if id := readID(path); !taken && (id == jid || !exists(path)) {
+		if id := readID(path); !r.taken(name, jid) && (id == jid || !exists(path)) {
 			return name
 		}
 	}
+}
+
+// taken is whether another account than jid has folder.
+func (r *Registry) taken(folder, jid string) bool {
+	for _, a := range r.Accounts {
+		if a.JID != jid && strings.EqualFold(a.Folder, folder) {
+			return true
+		}
+	}
+	return false
 }
 
 // Claim marks root as jid's account folder.

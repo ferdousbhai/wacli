@@ -160,7 +160,7 @@ func (l *linking) paired(jid string) {
 	}
 	reg := l.s.reg
 	if a, ok := reg.Find(jid); ok {
-		if a.Store != accounts.Pending && isLinked(reg.SessionPath(*a)) {
+		if a.Store != accounts.Pending && mayBeLinked(reg.SessionPath(*a)) {
 			// Or removed on the phone while no sync ran to hear of it.
 			l.err = fmt.Errorf("%w as %s, so this extra link is removed; if you removed it on the phone, run `wacli logout --account %s` first, then `wacli auth` again", errAlreadyLinked, a.Label(), accounts.Key(a.JID))
 			return

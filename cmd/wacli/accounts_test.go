@@ -215,6 +215,28 @@ func TestLinkingAnAccountTwiceIsRefused(t *testing.T) {
 	}
 }
 
+// An old session that can't be read might still be linked: a relink over it
+// is refused, not left unable to settle.
+func TestRelinkOverAnUnreadableSessionIsRefused(t *testing.T) {
+	f := testFlags(t)
+	old := filepath.Join(f.storeDir, "+15551234567", accounts.SessionFile)
+	os.MkdirAll(filepath.Dir(old), 0o700)
+	os.WriteFile(old, []byte(strings.Repeat("not a database ", 512)), 0o600)
+	reg, _ := accounts.Load(f.storeDir, f.archiveDir)
+	reg.Add("15551234567@s.whatsapp.net", "+15551234567")
+	reg.Save()
+	s, err := openSession(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	l := &linking{ctx: context.Background(), s: s}
+	l.handle(&events.PairSuccess{ID: types.NewADJID("15551234567", 0, 9)})
+	if acct, err := l.result(); acct != nil || !errors.Is(err, errAlreadyLinked) {
+		t.Errorf("%v %v", acct, err)
+	}
+}
+
 func TestWatchMergesAccounts(t *testing.T) {
 	personal := &fakeSource{ch: make(chan archiver.Message, 4), since: []archiver.Message{{Account: "Personal", ID: "P0", At: 300}}}
 	work := &fakeSource{ch: make(chan archiver.Message, 4), since: []archiver.Message{{Account: "+15557654321", ID: "W0", At: 200}}}

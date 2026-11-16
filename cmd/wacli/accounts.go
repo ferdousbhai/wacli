@@ -40,11 +40,9 @@ func readRegistry(f *rootFlags) (*accounts.Registry, error) {
 		l, err := lock.Acquire(f.storeDir)
 		switch {
 		case err == nil:
-			reg, err = settleRegistry(f)
+			reg, err = settleRegistry(f) // it follows renames too
 			_ = l.Release()
-			if err != nil {
-				return nil, err
-			}
+			return reg, err
 		case !lock.IsLocked(err):
 			return nil, err
 		default:
@@ -119,6 +117,23 @@ func sessionJID(path string) (string, error) {
 		return "", fmt.Errorf("device %q: %w", jid, err)
 	}
 	return j.ToNonAD().String(), nil
+}
+
+// isLinked reads the session store without changing it (opening it through
+// whatsmeow would create or migrate it, and doctor must only look). One that
+// can't be read counts as unlinked: for showing and choosing, never for
+// replacing (mayBeLinked).
+func isLinked(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	db, err := sql.Open("sqlite3", sqliteutil.FileURI(path, "mode=ro"))
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var n int
+	return db.QueryRow("SELECT COUNT(*) FROM whatsmeow_device").Scan(&n) == nil && n > 0
 }
 
 // mayBeLinked is whether a session store may still be linked; one that
