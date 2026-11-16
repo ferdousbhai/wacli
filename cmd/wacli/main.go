@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const version = "0.26.2"
+const version = "0.27.0"
 
 type rootFlags struct {
 	storeDir   string

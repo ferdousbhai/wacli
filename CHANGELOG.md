@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.27.0 - 2026-11-16
 
 - Several WhatsApp accounts: run `wacli auth` once per account (with the sync stopped). Each account is archived in its own folder, `~/WhatsApp/<account>/WhatsApp Chat - <name>/` (`<account>` is its number, `+15551234567`, until you rename the folder; wacli finds a renamed one by its `.wacli/account`), with its session in `<store>/<number>/session.db`. The chat folders themselves are unchanged. One `sync --follow` serves every account; an account WhatsApp unlinks is left out while the others carry on. `--account <number|folder>` (env `WACLI_ACCOUNT`) picks one for `send`, `backfill`, `refetch`, `import` and `logout`, and is needed only when several are linked; `chats`, `doctor` and `watch` show all accounts unless given one. `chats` gains an `account` column; `doctor --json` lists accounts under `accounts`; `sync --json` and `auth --json` add `account`.
 - Upgrading moves the existing archive by itself: the first command finds `session.db` at the top of the store and the chat folders at the top of the archive and renames them into `+<number>/` (nothing is copied or deleted; other files in `~/WhatsApp` stay), logging what it moved once. An interrupted move finishes on the next command. A running older sync must be restarted with this version for the move to happen.
