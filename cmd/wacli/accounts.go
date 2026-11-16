@@ -47,8 +47,8 @@ func readRegistry(f *rootFlags) (*accounts.Registry, error) {
 		case !lock.IsLocked(err):
 			return nil, err
 		default:
-			// A sync holds it: fine if it's only finishing a link, which it
-			// does on its own; the old layout it can't be reading for us.
+			// Held: by auth finishing a link (it settles it itself), or by an
+			// older sync, which can't move the old layout for us.
 			if p, ok := reg.LegacySession(); ok && isLinked(p) && len(reg.Accounts) == 0 {
 				return nil, errOldSync
 			}

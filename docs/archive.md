@@ -61,7 +61,8 @@ accounts: each account is a complete archive of its own, with its own
   the account in `accounts.json` with what is still to move, then renames the
   session files into `+<number>/` (the database last) and the chat folders
   `chats.json` lists, then `.wacli/`, into the account folder. Only renames
-  within the same directory, so the same filesystem; nothing is copied or
+  from the top of the store or archive into a folder inside it (the same
+  filesystem); nothing is copied or
   deleted, and other files at the top of the archive stay. An interrupted
   move is finished by the next command (the record says what's left); a
   finished one does nothing. Read-only commands do it too, unless another

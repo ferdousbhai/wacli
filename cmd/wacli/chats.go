@@ -370,7 +370,7 @@ func newDoctorCmd(f *rootFlags) *cobra.Command {
 					}
 					if running && linked && !st.LoggedOut && st.Halted == "" {
 						if time.Since(st.UpdatedAt) > 2*time.Minute {
-							probs = append(probs, "sync is running but hasn't reported for "+time.Since(st.UpdatedAt).Round(time.Second).String()+" (linked after it started? restart it: systemctl --user restart wacli-sync)")
+							probs = append(probs, "sync is running but hasn't reported for "+time.Since(st.UpdatedAt).Round(time.Second).String()+" (stuck? restart it: systemctl --user restart wacli-sync)")
 						} else if !st.Connected {
 							probs = append(probs, "sync is running but not connected to WhatsApp")
 						}

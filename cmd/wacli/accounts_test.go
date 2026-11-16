@@ -264,6 +264,23 @@ func TestRelinkOverAnUnreadableSessionIsRefused(t *testing.T) {
 	}
 }
 
+// A logged-out account whose folder was deleted isn't opened (and so made
+// again) by every sync.
+func TestSyncLeavesADeletedLoggedOutAccountAlone(t *testing.T) {
+	f := testFlags(t)
+	reg, _ := accounts.Load(f.storeDir, f.archiveDir)
+	reg.Add("15551234567@s.whatsapp.net", "+15551234567")
+	if list, err := every(reg); err != nil || len(list) != 0 {
+		t.Errorf("opened %v %v", list, err)
+	}
+	meta := filepath.Join(f.archiveDir, "+15551234567", ".wacli")
+	os.MkdirAll(meta, 0o700)
+	os.WriteFile(filepath.Join(meta, "chats.json"), []byte("{}"), 0o600)
+	if list, err := every(reg); err != nil || len(list) != 1 {
+		t.Errorf("kept folder: %v %v", list, err)
+	}
+}
+
 func TestWatchMergesAccounts(t *testing.T) {
 	personal := &fakeSource{ch: make(chan archiver.Message, 4), since: []archiver.Message{{Account: "Personal", ID: "P0", At: 300}}}
 	work := &fakeSource{ch: make(chan archiver.Message, 4), since: []archiver.Message{{Account: "+15557654321", ID: "W0", At: 200}}}

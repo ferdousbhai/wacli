@@ -62,8 +62,7 @@ downloads media. Without `--follow` it stops once all are idle (`--json`
 prints one summary, or a list with several accounts). With `--follow` it runs
 until stopped (normally as the `wacli-sync` systemd user service; see the
 README), one process and one connection per account. An account WhatsApp
-unlinks or stops for good is left out and the others carry on; an account
-linked after it started is served once it restarts. If WhatsApp unlinks
+unlinks or stops for good is left out and the others carry on. If WhatsApp unlinks
 the last account, it exits with status 3 so the service stops restarting. If
 WhatsApp ends the connection for good another way (another client took over
 the session, a temporary ban, an outdated wacli), it exits with status 4 and

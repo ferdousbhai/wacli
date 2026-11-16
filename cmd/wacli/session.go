@@ -49,8 +49,21 @@ func one(sel string) picker {
 	}
 }
 
-// every opens all accounts.
-func every(r *accounts.Registry) ([]accounts.Account, error) { return r.Filter("") }
+// every opens all accounts; a logged-out one only while its folder is kept
+// (opening it would make it again), for an import into it.
+func every(r *accounts.Registry) ([]accounts.Account, error) {
+	all, err := r.Filter("")
+	if errors.Is(err, accounts.ErrNone) {
+		return nil, errUnlinked
+	}
+	var list []accounts.Account
+	for _, a := range all {
+		if isLinked(r.SessionPath(a)) || archive.Exists(r.ArchiveRoot(a)) {
+			list = append(list, a)
+		}
+	}
+	return list, err
+}
 
 // openSession takes the store lock, moves the single-account layout into
 // accounts (or finishes such a move), follows renamed account folders and
@@ -72,9 +85,6 @@ func openSession(f *rootFlags, pick picker) (*session, error) {
 		return s, nil
 	}
 	list, err := pick(s.reg)
-	if errors.Is(err, accounts.ErrNone) {
-		err = errUnlinked
-	}
 	if err != nil {
 		s.close()
 		return nil, err
@@ -163,7 +173,7 @@ func (s *session) account(sel string) (*account, error) {
 			return acct, nil
 		}
 	}
-	return nil, fmt.Errorf("account %s isn't open in this wacli (linked after the sync started? restart it: systemctl --user restart wacli-sync)", a.Label())
+	return nil, fmt.Errorf("%s: %w", a.Label(), errUnlinked) // logged out, its folder deleted
 }
 
 // linked is the open accounts that have a session.
